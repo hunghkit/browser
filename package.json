@@ -1,0 +1,36 @@
+{
+  "name": "ZenBrowser",
+  "version": "1.0.0",
+  "description": "A browser with proxy support for HTTP, HTTPS, SOCKS4, and SOCKS5 protocols",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "pack": "npx @electron/packager . --out=dist --overwrite --platform=darwin --arch=x64 --icon=build/icon.icns",
+    "pack:win": "npx @electron/packager . --out=dist --overwrite --platform=win32 --arch=x64 --icon=build/icon.ico",
+    "pack:linux": "npx @electron/packager . --out=dist --overwrite --platform=linux --arch=x64 --icon=build/icon.png",
+    "dev": "electron . --dev"
+  },
+  "keywords": [
+    "electron",
+    "browser",
+    "proxy"
+  ],
+  "build": {
+    "appId": "com.myzens.browser",
+    "mac": {
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/packager": "^19.0.1",
+    "electron-packager": "^17.1.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^26.0.12"
+  }
+}

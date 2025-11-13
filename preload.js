@@ -1,0 +1,87 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+// Expose protected methods that allow the renderer process to use
+// the ipcRenderer without exposing the entire object
+contextBridge.exposeInMainWorld('electronAPI', {
+  // Proxy settings (per-tab)
+  getProxySettings: (tabId) => ipcRenderer.invoke('get-proxy-settings', tabId),
+  saveProxySettings: (tabId, settings) => ipcRenderer.invoke('save-proxy-settings', tabId, settings),
+  testProxy: (tabId, settings) => ipcRenderer.invoke('test-proxy', tabId, settings),
+
+  // Proxy list management
+  getProxyList: () => ipcRenderer.invoke('get-proxy-list'),
+  getProxyById: (proxyId) => ipcRenderer.invoke('get-proxy-by-id', proxyId),
+  saveProxyToList: (proxyData) => ipcRenderer.invoke('save-proxy-to-list', proxyData),
+  deleteProxyFromList: (proxyId) => ipcRenderer.invoke('delete-proxy-from-list', proxyId),
+  applyProxyToTab: (tabId, proxyId) => ipcRenderer.invoke('apply-proxy-to-tab', tabId, proxyId),
+
+  // Navigation
+  navigateToUrl: (url, tabId) => ipcRenderer.invoke('navigate-to-url', url, tabId),
+  getCurrentUrl: () => ipcRenderer.invoke('get-current-url'),
+
+  // Browser controls
+  canGoBack: () => ipcRenderer.invoke('can-go-back'),
+  canGoForward: () => ipcRenderer.invoke('can-go-forward'),
+  goBack: () => ipcRenderer.invoke('go-back'),
+  goForward: () => ipcRenderer.invoke('go-forward'),
+  reload: () => ipcRenderer.invoke('reload'),
+
+  // Tab management
+  createTab: (url) => ipcRenderer.invoke('create-tab', url),
+  closeTab: (tabId) => ipcRenderer.invoke('close-tab', tabId),
+  switchTab: (tabId) => ipcRenderer.invoke('switch-tab', tabId),
+  getTabs: () => ipcRenderer.invoke('get-tabs'),
+  getActiveTabId: () => ipcRenderer.invoke('get-active-tab-id'),
+
+  // UI actions
+  openSettings: () => ipcRenderer.invoke('open-settings'),
+  openDevTools: () => ipcRenderer.invoke('open-dev-tools'),
+
+  // Events
+  onUrlChanged: (callback) => {
+    ipcRenderer.on('url-changed', (event, data) => callback(data));
+  },
+  onLoadError: (callback) => {
+    ipcRenderer.on('load-error', (event, error) => callback(error));
+  },
+  onBrowserLoading: (callback) => {
+    ipcRenderer.on('browser-loading', (event, data) => callback(data));
+  },
+  onTitleChanged: (callback) => {
+    ipcRenderer.on('title-changed', (event, data) => callback(data));
+  },
+  onTabCreated: (callback) => {
+    ipcRenderer.on('tab-created', (event, data) => callback(data));
+  },
+  onTabClosed: (callback) => {
+    ipcRenderer.on('tab-closed', (event, data) => callback(data));
+  },
+  onTabSwitched: (callback) => {
+    ipcRenderer.on('tab-switched', (event, data) => callback(data));
+  },
+  onTabUpdated: (callback) => {
+    ipcRenderer.on('tab-updated', (event, data) => callback(data));
+  },
+  onTabLoading: (callback) => {
+    ipcRenderer.on('tab-loading', (event, data) => callback(data));
+  },
+
+  // File system operations
+  getHomeDirectory: () => ipcRenderer.invoke('get-home-directory'),
+  readDirectory: (path) => ipcRenderer.invoke('read-directory', path),
+  getParentDirectory: (path) => ipcRenderer.invoke('get-parent-directory', path),
+  resolvePath: (path) => ipcRenderer.invoke('resolve-path', path),
+
+  // Auto-refresh operations
+  getAutoRefreshSettings: (tabId) => ipcRenderer.invoke('get-auto-refresh-settings', tabId),
+  setAutoRefreshSettings: (tabId, enabled, intervalSeconds) => ipcRenderer.invoke('set-auto-refresh-settings', tabId, enabled, intervalSeconds),
+
+  // Modal visibility
+  setModalVisible: (visible) => ipcRenderer.invoke('set-modal-visible', visible),
+
+  // Remove listeners
+  removeAllListeners: (channel) => {
+    ipcRenderer.removeAllListeners(channel);
+  }
+});
+
