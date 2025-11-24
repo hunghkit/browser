@@ -148,6 +148,7 @@
       <button class="tab-btn active" data-tab="list">Proxy List</button>
       <button class="tab-btn" data-tab="new">Add/Edit Proxy</button>
       <button class="tab-btn" data-tab="apply">Apply to Tab</button>
+      <button class="tab-btn" data-tab="browser">Browser Identity</button>
     </div>
 
     <!-- Proxy List Tab -->
@@ -208,6 +209,29 @@
       </div>
       <div class="form-actions">
         <button type="button" id="apply-proxy-btn" class="btn btn-primary">Apply to Current Tab</button>
+      </div>
+    </div>
+
+    <!-- Browser Identity Tab -->
+    <div id="browser-identity-tab" class="tab-content">
+      <div class="form-group">
+        <label for="browser-identity-select">Browser Identity</label>
+        <select id="browser-identity-select" class="proxy-select">
+          <option value="chrome" selected>Google Chrome</option>
+          <option value="firefox">Mozilla Firefox</option>
+        </select>
+        <small>Select which browser to emulate. This changes the User-Agent string sent to websites.</small>
+      </div>
+      <div class="form-group">
+        <label>Current Tab</label>
+        <div id="browser-tab-info" class="current-tab-info">Loading...</div>
+      </div>
+      <div class="form-group">
+        <label>Current User-Agent</label>
+        <div id="current-user-agent" class="current-tab-info" style="font-family: monospace; font-size: 12px; word-break: break-all;">Loading...</div>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="apply-browser-identity-btn" class="btn btn-primary">Apply to Current Tab</button>
       </div>
     </div>
 

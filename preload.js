@@ -74,7 +74,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Auto-refresh operations
   getAutoRefreshSettings: (tabId) => ipcRenderer.invoke('get-auto-refresh-settings', tabId),
-  setAutoRefreshSettings: (tabId, enabled, intervalSeconds) => ipcRenderer.invoke('set-auto-refresh-settings', tabId, enabled, intervalSeconds),
+  setAutoRefreshSettings: (tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls) => ipcRenderer.invoke('set-auto-refresh-settings', tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls),
+
+  // Session operations
+  clearSessionData: (tabId) => ipcRenderer.invoke('clear-session-data', tabId),
+
+  // Browser Identity operations
+  getBrowserIdentity: (tabId) => ipcRenderer.invoke('get-browser-identity', tabId),
+  setBrowserIdentity: (tabId, identity) => ipcRenderer.invoke('set-browser-identity', tabId, identity),
+  getUserAgent: (tabId) => ipcRenderer.invoke('get-user-agent', tabId),
 
   // Modal visibility
   setModalVisible: (visible) => ipcRenderer.invoke('set-modal-visible', visible),

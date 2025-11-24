@@ -60,6 +60,12 @@
             <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
           </svg>
         </button>
+        <button id="clear-session-btn" class="action-btn" title="Clear Session Data (Incognito)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14C11.3137 14 14 11.3137 14 8C14 4.68629 11.3137 2 8 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5 5L11 11M11 5L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button id="devtools-btn" class="action-btn" title="Developer Tools">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M6 2L2 6V14C2 14.5523 2.44772 15 3 15H13C13.5523 15 14 14.5523 14 14V6L10 2H6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -123,8 +129,41 @@
             </div>
             <div class="form-group">
               <label for="auto-refresh-interval">Refresh Interval (seconds)</label>
-              <input type="number" id="auto-refresh-interval" min="1" max="3600" value="600" />
-              <small>Minimum: 1 second, Maximum: 3600 seconds (1 hour)</small>
+              <input type="number" id="auto-refresh-interval" min="1" max="36000" value="600" />
+              <small>Minimum: 1 second, Maximum: 36000 seconds (1 hour)</small>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="auto-refresh-reset-session" />
+                Reset Session (Incognito Mode)
+              </label>
+              <small>Clear cookies, cache, and session data on each refresh (like incognito mode)</small>
+            </div>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="auto-refresh-playlist-enabled" />
+                Enable Playlist Mode
+              </label>
+              <small>Load URLs from playlist instead of reloading current page</small>
+            </div>
+            <div id="playlist-container" class="playlist-container" style="display: none;">
+              <div class="form-group">
+                <label for="playlist-mode">Playlist Mode</label>
+                <select id="playlist-mode" class="proxy-select">
+                  <option value="sequential">Sequential (Tuần tự)</option>
+                  <option value="random">Random (Ngẫu nhiên)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Playlist URLs</label>
+                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                  <input type="text" id="playlist-url-input" class="url-bar" placeholder="Enter URL to add..." style="flex: 1;" />
+                  <button type="button" id="playlist-add-btn" class="btn btn-secondary">Add</button>
+                </div>
+                <div id="playlist-list" class="playlist-list" style="max-height: 200px; overflow-y: auto; border: 1px solid #d0d0d0; border-radius: 6px; padding: 8px; background: #f9f9f9;">
+                  <div class="empty-list" style="text-align: center; color: #999; padding: 20px;">No URLs in playlist</div>
+                </div>
+              </div>
             </div>
             <div id="auto-refresh-status" class="auto-refresh-status"></div>
           </div>

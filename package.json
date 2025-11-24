@@ -22,7 +22,9 @@
       "category": "public.app-category.utilities"
     },
     "win": {
-      "target": "nsis"
+      "target": "msi",
+      "publisherName": "HHH",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     }
   },
   "author": "",

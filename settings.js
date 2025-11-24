@@ -38,7 +38,8 @@ class SettingsController {
         const tabIdMap = {
           'list': 'proxy-list-tab',
           'new': 'proxy-form-tab',
-          'apply': 'apply-proxy-tab'
+          'apply': 'apply-proxy-tab',
+          'browser': 'browser-identity-tab'
         };
 
         const targetContentId = tabIdMap[targetTab];
@@ -52,6 +53,9 @@ class SettingsController {
         } else if (targetTab === 'apply') {
           this.loadProxySelect();
           this.updateCurrentTabInfo();
+        } else if (targetTab === 'browser') {
+          this.loadBrowserIdentity();
+          this.updateBrowserTabInfo();
         }
       });
     });
@@ -123,6 +127,10 @@ class SettingsController {
     this.closeBtn = document.getElementById('settings-close-btn');
     this.addNewProxyBtn = document.getElementById('add-new-proxy-btn');
     this.applyProxyBtn = document.getElementById('apply-proxy-btn');
+    this.browserIdentitySelect = document.getElementById('browser-identity-select');
+    this.applyBrowserIdentityBtn = document.getElementById('apply-browser-identity-btn');
+    this.browserTabInfo = document.getElementById('browser-tab-info');
+    this.currentUserAgent = document.getElementById('current-user-agent');
   }
 
   attachEventListeners() {
@@ -151,6 +159,10 @@ class SettingsController {
 
     this.applyProxyBtn.addEventListener('click', () => {
       this.applyProxyToTab();
+    });
+
+    this.applyBrowserIdentityBtn.addEventListener('click', () => {
+      this.applyBrowserIdentity();
     });
   }
 
@@ -448,6 +460,66 @@ class SettingsController {
     } catch (error) {
       console.error('Error applying proxy:', error);
       this.showStatus('Error applying proxy: ' + error.message, 'error');
+    }
+  }
+
+  async loadBrowserIdentity() {
+    if (!this.currentTabId) {
+      this.browserIdentitySelect.value = 'chrome';
+      return;
+    }
+
+    try {
+      const identity = await window.electronAPI.getBrowserIdentity(this.currentTabId);
+      this.browserIdentitySelect.value = identity || 'chrome';
+    } catch (error) {
+      console.error('Error loading browser identity:', error);
+      this.browserIdentitySelect.value = 'chrome';
+    }
+  }
+
+  async updateBrowserTabInfo() {
+    if (!this.currentTabId) {
+      this.browserTabInfo.textContent = 'No active tab';
+      this.currentUserAgent.textContent = 'N/A';
+      return;
+    }
+
+    try {
+      this.browserTabInfo.textContent = `Tab ${this.currentTabId}`;
+      const userAgent = await window.electronAPI.getUserAgent(this.currentTabId);
+      this.currentUserAgent.textContent = userAgent || 'N/A';
+    } catch (error) {
+      console.error('Error updating browser tab info:', error);
+      this.browserTabInfo.textContent = `Tab ${this.currentTabId}: Error loading info`;
+      this.currentUserAgent.textContent = 'Error loading User-Agent';
+    }
+  }
+
+  async applyBrowserIdentity() {
+    if (!this.currentTabId) {
+      this.showStatus('No active tab found', 'error');
+      return;
+    }
+
+    const identity = this.browserIdentitySelect.value || 'chrome';
+
+    try {
+      const result = await window.electronAPI.setBrowserIdentity(this.currentTabId, identity);
+      if (result.success) {
+        this.showStatus('Browser identity applied successfully!', 'success');
+        this.updateBrowserTabInfo();
+
+        // Close window after a short delay
+        setTimeout(() => {
+          window.close();
+        }, 1500);
+      } else {
+        this.showStatus(result.error || 'Failed to apply browser identity', 'error');
+      }
+    } catch (error) {
+      console.error('Error applying browser identity:', error);
+      this.showStatus('Error applying browser identity: ' + error.message, 'error');
     }
   }
 

@@ -19,6 +19,7 @@ class BrowserController {
     this.settingsBtn = document.getElementById('settings-btn');
     this.devtoolsBtn = document.getElementById('devtools-btn');
     this.autoRefreshBtn = document.getElementById('auto-refresh-btn');
+    this.clearSessionBtn = document.getElementById('clear-session-btn');
     this.proxySelector = document.getElementById('proxy-selector');
     this.errorMessage = document.getElementById('error-message');
     this.errorText = document.getElementById('error-text');
@@ -31,10 +32,20 @@ class BrowserController {
     this.autoRefreshModal = document.getElementById('auto-refresh-modal');
     this.autoRefreshEnabled = document.getElementById('auto-refresh-enabled');
     this.autoRefreshInterval = document.getElementById('auto-refresh-interval');
+    this.autoRefreshResetSession = document.getElementById('auto-refresh-reset-session');
+    this.autoRefreshPlaylistEnabled = document.getElementById('auto-refresh-playlist-enabled');
+    this.playlistContainer = document.getElementById('playlist-container');
+    this.playlistMode = document.getElementById('playlist-mode');
+    this.playlistUrlInput = document.getElementById('playlist-url-input');
+    this.playlistAddBtn = document.getElementById('playlist-add-btn');
+    this.playlistList = document.getElementById('playlist-list');
     this.autoRefreshStatus = document.getElementById('auto-refresh-status');
     this.autoRefreshCloseBtn = document.getElementById('auto-refresh-close-btn');
     this.autoRefreshCancelBtn = document.getElementById('auto-refresh-cancel-btn');
     this.autoRefreshSaveBtn = document.getElementById('auto-refresh-save-btn');
+    
+    // Playlist data
+    this.playlistUrls = [];
   }
 
   attachEventListeners() {
@@ -82,6 +93,10 @@ class BrowserController {
       this.openAutoRefreshModal();
     });
 
+    this.clearSessionBtn.addEventListener('click', () => {
+      this.clearSessionData();
+    });
+
     // Proxy selector
     this.proxySelector.addEventListener('change', () => {
       this.applyProxyToCurrentTab();
@@ -98,6 +113,21 @@ class BrowserController {
 
     this.autoRefreshSaveBtn.addEventListener('click', () => {
       this.saveAutoRefreshSettings();
+    });
+
+    // Playlist handlers
+    this.autoRefreshPlaylistEnabled.addEventListener('change', () => {
+      this.playlistContainer.style.display = this.autoRefreshPlaylistEnabled.checked ? 'block' : 'none';
+    });
+
+    this.playlistAddBtn.addEventListener('click', () => {
+      this.addPlaylistUrl();
+    });
+
+    this.playlistUrlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        this.addPlaylistUrl();
+      }
     });
 
     // Close modal on background click
@@ -265,8 +295,16 @@ class BrowserController {
     this.tabs.delete(tabId);
   }
 
-  switchToTab(tabId) {
-    // Update active state
+  async switchToTab(tabId) {
+    // Don't switch if already active
+    if (this.activeTabId === tabId) {
+      return;
+    }
+
+    // Set activeTabId early to prevent event loop
+    this.activeTabId = tabId;
+
+    // Update active state in UI first
     this.tabs.forEach((tab, id) => {
       if (id === tabId) {
         tab.element.classList.add('active');
@@ -277,7 +315,12 @@ class BrowserController {
       }
     });
 
-    this.activeTabId = tabId;
+    // Call main process to switch BrowserView (show/hide, no reload)
+    try {
+      await window.electronAPI.switchTab(tabId);
+    } catch (error) {
+      console.error('Error switching tab:', error);
+    }
 
     // Update URL bar
     const tab = this.tabs.get(tabId);
@@ -410,6 +453,12 @@ class BrowserController {
       const settings = await window.electronAPI.getAutoRefreshSettings(this.activeTabId);
       this.autoRefreshEnabled.checked = settings.enabled;
       this.autoRefreshInterval.value = settings.interval;
+      this.autoRefreshResetSession.checked = settings.resetSession || false;
+      this.autoRefreshPlaylistEnabled.checked = settings.playlistEnabled || false;
+      this.playlistContainer.style.display = this.autoRefreshPlaylistEnabled.checked ? 'block' : 'none';
+      this.playlistMode.value = settings.playlistMode || 'sequential';
+      this.playlistUrls = settings.playlistUrls || [];
+      this.renderPlaylist();
       this.updateAutoRefreshStatus(settings);
 
       // Hide BrowserView to allow modal interaction
@@ -442,7 +491,9 @@ class BrowserController {
 
   updateAutoRefreshStatus(settings) {
     if (settings.enabled) {
-      this.autoRefreshStatus.textContent = `Auto-refresh is enabled. Page will refresh every ${settings.interval} second(s).`;
+      const resetText = settings.resetSession ? ' (with session reset)' : '';
+      const playlistText = settings.playlistEnabled ? ` (playlist: ${settings.playlistUrls?.length || 0} URLs, ${settings.playlistMode || 'sequential'})` : '';
+      this.autoRefreshStatus.textContent = `Auto-refresh is enabled. Page will refresh every ${settings.interval} second(s)${resetText}${playlistText}.`;
       this.autoRefreshStatus.className = 'auto-refresh-status enabled';
       this.autoRefreshBtn.classList.add('active');
     } else {
@@ -450,6 +501,58 @@ class BrowserController {
       this.autoRefreshStatus.className = 'auto-refresh-status disabled';
       this.autoRefreshBtn.classList.remove('active');
     }
+  }
+
+  addPlaylistUrl() {
+    const url = this.playlistUrlInput.value.trim();
+    if (!url) return;
+
+    // Format URL if needed
+    let formattedUrl = url;
+    if (!url.includes('://')) {
+      if (url.includes('.') && !url.includes(' ')) {
+        formattedUrl = 'https://' + url;
+      } else {
+        this.showError('Invalid URL');
+        return;
+      }
+    }
+
+    if (this.playlistUrls.includes(formattedUrl)) {
+      this.showError('URL already in playlist');
+      return;
+    }
+
+    this.playlistUrls.push(formattedUrl);
+    this.playlistUrlInput.value = '';
+    this.renderPlaylist();
+  }
+
+  removePlaylistUrl(index) {
+    this.playlistUrls.splice(index, 1);
+    this.renderPlaylist();
+  }
+
+  renderPlaylist() {
+    if (this.playlistUrls.length === 0) {
+      this.playlistList.innerHTML = '<div class="empty-list" style="text-align: center; color: #999; padding: 20px;">No URLs in playlist</div>';
+      return;
+    }
+
+    this.playlistList.innerHTML = this.playlistUrls.map((url, index) => `
+      <div class="playlist-item" style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin-bottom: 4px; background: #fff; border-radius: 4px; border: 1px solid #e0e0e0;">
+        <span style="flex: 1; font-size: 12px; word-break: break-all; margin-right: 8px;">${url}</span>
+        <button type="button" class="btn btn-secondary btn-small" data-index="${index}" style="flex-shrink: 0;">Remove</button>
+      </div>
+    `).join('');
+
+    // Attach remove handlers
+    this.playlistList.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const index = parseInt(e.target.dataset.index);
+        this.removePlaylistUrl(index);
+      });
+    });
   }
 
   async saveAutoRefreshSettings() {
@@ -460,9 +563,19 @@ class BrowserController {
 
     const enabled = this.autoRefreshEnabled.checked;
     const interval = parseInt(this.autoRefreshInterval.value, 10);
+    const resetSession = this.autoRefreshResetSession.checked;
+    const playlistEnabled = this.autoRefreshPlaylistEnabled.checked;
+    const playlistMode = this.playlistMode.value;
+    const playlistUrls = this.playlistUrls;
 
-    if (isNaN(interval) || interval < 1 || interval > 3600) {
-      this.autoRefreshStatus.textContent = 'Interval must be between 1 and 3600 seconds.';
+    if (isNaN(interval) || interval < 1 || interval > 36000) {
+      this.autoRefreshStatus.textContent = 'Interval must be between 1 and 36000 seconds.';
+      this.autoRefreshStatus.className = 'auto-refresh-status error';
+      return;
+    }
+
+    if (playlistEnabled && playlistUrls.length === 0) {
+      this.autoRefreshStatus.textContent = 'Please add at least one URL to playlist.';
       this.autoRefreshStatus.className = 'auto-refresh-status error';
       return;
     }
@@ -471,11 +584,15 @@ class BrowserController {
       const result = await window.electronAPI.setAutoRefreshSettings(
         this.activeTabId,
         enabled,
-        interval
+        interval,
+        resetSession,
+        playlistEnabled,
+        playlistMode,
+        playlistUrls
       );
 
       if (result.success) {
-        const settings = { enabled, interval };
+        const settings = { enabled, interval, resetSession, playlistEnabled, playlistMode, playlistUrls };
         this.updateAutoRefreshStatus(settings);
         this.autoRefreshStatus.textContent = 'Settings saved successfully!';
         this.autoRefreshStatus.className = 'auto-refresh-status success';
@@ -555,6 +672,36 @@ class BrowserController {
       this.proxySelector.value = '';
     } catch (error) {
       console.error('Error updating proxy selector:', error);
+    }
+  }
+
+  async clearSessionData() {
+    if (!this.activeTabId) {
+      this.showError('No active tab');
+      return;
+    }
+
+    // Confirm action
+    if (!confirm('Clear all session data (cookies, cache, localStorage)? This will reload the page.')) {
+      return;
+    }
+
+    try {
+      this.showLoading();
+      const result = await window.electronAPI.clearSessionData(this.activeTabId);
+      if (result.success) {
+        this.showError('Session data cleared successfully');
+        setTimeout(() => {
+          this.hideError();
+        }, 2000);
+      } else {
+        this.showError(result.error || 'Failed to clear session data');
+      }
+    } catch (error) {
+      console.error('Error clearing session data:', error);
+      this.showError('Error clearing session data: ' + error.message);
+    } finally {
+      this.hideLoading();
     }
   }
 

@@ -10,8 +10,10 @@ let activeTabId = null;
 let nextTabId = 1;
 let autoRefreshIntervals = new Map(); // Map of tabId -> intervalId
 let autoRefreshSettings = new Map(); // Map of tabId -> { enabled: boolean, interval: number }
+let playlistIndices = new Map(); // Map of tabId -> current playlist index for sequential mode
 let tabProxySettings = new Map(); // Map of tabId -> proxy settings
 let tabSessions = new Map(); // Map of tabId -> Session
+let tabBrowserIdentity = new Map(); // Map of tabId -> 'chrome' | 'firefox'
 let appMenu = null; // Store application menu for reuse
 let proxyList = []; // List of saved proxies: [{ id, name, type, host, port, username, password }]
 const PROXY_LIST_FILE = path.join(app.getPath('userData'), 'proxy-list.json');
@@ -44,6 +46,42 @@ function saveProxyList() {
     console.error('Error saving proxy list:', error);
     return false;
   }
+}
+
+// Get User-Agent string for browser identity
+function getUserAgentString(identity) {
+  const identityType = identity || 'chrome';
+  
+  if (identityType === 'firefox') {
+    // Firefox User-Agent
+    return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0';
+  } else {
+    // Chrome User-Agent (default)
+    return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  }
+}
+
+// Apply browser identity (User-Agent) to a tab
+function applyBrowserIdentityToTab(tabId, identity) {
+  if (!tabs.has(tabId)) {
+    console.log(`Tab ${tabId} does not exist, cannot apply browser identity`);
+    return false;
+  }
+
+  const browserView = tabs.get(tabId);
+  if (!browserView || browserView.webContents.isDestroyed()) {
+    console.log(`Tab ${tabId} BrowserView is invalid`);
+    return false;
+  }
+
+  const userAgent = getUserAgentString(identity);
+  browserView.webContents.setUserAgent(userAgent);
+  console.log(`Applied browser identity "${identity}" to tab ${tabId}: ${userAgent}`);
+  
+  // Store identity
+  tabBrowserIdentity.set(tabId, identity || 'chrome');
+  
+  return true;
 }
 
 // Build proxy string from settings
@@ -201,6 +239,10 @@ function createNewTab(url = 'about:blank') {
   tabs.set(tabId, browserView);
   activeTabId = tabId;
 
+  // Set default browser identity to Chrome BEFORE loading URL
+  // This ensures User-Agent is set before any network requests
+  applyBrowserIdentityToTab(tabId, 'chrome');
+
   // Set as active view first
   mainWindow.setBrowserView(browserView);
   updateActiveTabBounds();
@@ -210,14 +252,26 @@ function createNewTab(url = 'about:blank') {
   const existingProxy = tabProxySettings.get(tabId);
   if (existingProxy) {
     applyProxySettingsToTab(tabId, existingProxy).then(() => {
+      // Ensure User-Agent is still set before loading
+      if (!tabBrowserIdentity.has(tabId)) {
+        applyBrowserIdentityToTab(tabId, 'chrome');
+      }
       // Load URL after proxy is confirmed applied
       browserView.webContents.loadURL(url);
     }).catch((error) => {
       console.error('Error applying proxy when creating tab:', error);
+      // Ensure User-Agent is still set before loading
+      if (!tabBrowserIdentity.has(tabId)) {
+        applyBrowserIdentityToTab(tabId, 'chrome');
+      }
       // Load URL even if proxy fails
       browserView.webContents.loadURL(url);
     });
   } else {
+    // Ensure User-Agent is set before loading URL
+    if (!tabBrowserIdentity.has(tabId)) {
+      applyBrowserIdentityToTab(tabId, 'chrome');
+    }
     // Load URL immediately if no proxy
     browserView.webContents.loadURL(url);
   }
@@ -278,6 +332,7 @@ function createNewTab(url = 'about:blank') {
 }
 
 // Switch to a different tab
+// This function only shows/hides BrowserViews - it does NOT reload URLs
 function switchTab(tabId) {
   if (!mainWindow || !tabs.has(tabId)) return false;
 
@@ -285,8 +340,13 @@ function switchTab(tabId) {
   if (!browserView || browserView.webContents.isDestroyed()) return false;
 
   activeTabId = tabId;
+  // Show the selected BrowserView and hide others (no reload)
   mainWindow.setBrowserView(browserView);
   updateActiveTabBounds();
+
+  // Ensure browser identity is still applied (in case it wasn't set before)
+  const identity = tabBrowserIdentity.get(tabId) || 'chrome';
+  applyBrowserIdentityToTab(tabId, identity);
 
   // Ensure proxy is still applied (in case session was recreated)
   const proxySettings = tabProxySettings.get(tabId);
@@ -362,18 +422,107 @@ function closeTab(tabId) {
   return true;
 }
 
+// Clear session data (cookies, cache, localStorage, sessionStorage) for a tab
+async function clearSessionData(tabId) {
+  if (!tabs.has(tabId)) return;
+
+  const browserView = tabs.get(tabId);
+  if (!browserView || browserView.webContents.isDestroyed()) return;
+
+  const tabSession = browserView.webContents.session;
+  if (!tabSession) return;
+
+  try {
+    const currentUrl = browserView.webContents.getURL();
+    
+    // Clear localStorage and sessionStorage via JavaScript injection first (before clearing cookies)
+    if (currentUrl && currentUrl !== 'about:blank') {
+      try {
+        await browserView.webContents.executeJavaScript(`
+          try {
+            localStorage.clear();
+            sessionStorage.clear();
+          } catch(e) {
+            // Ignore errors (may fail if page is not fully loaded)
+          }
+        `);
+      } catch (error) {
+        // Ignore - page may not be ready
+      }
+    }
+
+    // Clear cookies, cache, and storage data
+    await tabSession.clearStorageData({
+      storages: ['cookies', 'cache', 'localstorage', 'sessionstorage']
+    });
+
+    // Also clear cache explicitly
+    await new Promise((resolve) => {
+      tabSession.clearCache(() => resolve());
+    });
+
+    console.log(`Session data cleared for tab ${tabId} (incognito mode)`);
+  } catch (error) {
+    console.error(`Error clearing session data for tab ${tabId}:`, error);
+  }
+}
+
 // Start auto-refresh for a tab
-function startAutoRefresh(tabId, intervalSeconds) {
+function startAutoRefresh(tabId, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) {
   // Stop existing auto-refresh if any
   stopAutoRefresh(tabId);
 
   if (!tabs.has(tabId)) return;
 
+  // Initialize playlist index if not exists
+  if (!playlistIndices.has(tabId)) {
+    playlistIndices.set(tabId, 0);
+  }
+
   const intervalMs = intervalSeconds * 1000;
-  const intervalId = setInterval(() => {
+  const intervalId = setInterval(async () => {
     const browserView = tabs.get(tabId);
     if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
-      browserView.webContents.reload();
+      // If playlist is enabled, load URL from playlist
+      if (playlistEnabled && playlistUrls && playlistUrls.length > 0) {
+        let urlToLoad;
+        
+        if (playlistMode === 'random') {
+          // Random mode: pick a random URL
+          const randomIndex = Math.floor(Math.random() * playlistUrls.length);
+          urlToLoad = playlistUrls[randomIndex];
+        } else {
+          // Sequential mode: go through URLs in order
+          let playlistIndex = playlistIndices.get(tabId) || 0;
+          urlToLoad = playlistUrls[playlistIndex];
+          playlistIndex = (playlistIndex + 1) % playlistUrls.length;
+          playlistIndices.set(tabId, playlistIndex);
+        }
+
+        // If resetSession is enabled, clear all session data before loading
+        if (resetSession) {
+          await clearSessionData(tabId);
+        }
+
+        // Load the URL from playlist
+        setTimeout(() => {
+          if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+            browserView.webContents.loadURL(urlToLoad, { bypassCache: resetSession });
+          }
+        }, resetSession ? 100 : 0);
+      } else {
+        // Normal reload mode
+        if (resetSession) {
+          await clearSessionData(tabId);
+          setTimeout(() => {
+            if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+              browserView.webContents.reloadIgnoringCache();
+            }
+          }, 100);
+        } else {
+          browserView.webContents.reload();
+        }
+      }
     } else {
       // Tab was closed, stop auto-refresh
       stopAutoRefresh(tabId);
@@ -389,15 +538,31 @@ function stopAutoRefresh(tabId) {
     clearInterval(autoRefreshIntervals.get(tabId));
     autoRefreshIntervals.delete(tabId);
   }
+  // Reset playlist index when stopping
+  playlistIndices.delete(tabId);
 }
 
 // Set auto-refresh settings for a tab
-function setAutoRefreshSettings(tabId, enabled, intervalSeconds) {
+function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) {
   if (enabled) {
-    autoRefreshSettings.set(tabId, { enabled: true, interval: intervalSeconds });
-    startAutoRefresh(tabId, intervalSeconds);
+    autoRefreshSettings.set(tabId, { 
+      enabled: true, 
+      interval: intervalSeconds, 
+      resetSession: resetSession || false,
+      playlistEnabled: playlistEnabled || false,
+      playlistMode: playlistMode || 'sequential',
+      playlistUrls: playlistUrls || []
+    });
+    startAutoRefresh(tabId, intervalSeconds, resetSession || false, playlistEnabled || false, playlistMode || 'sequential', playlistUrls || []);
   } else {
-    autoRefreshSettings.set(tabId, { enabled: false, interval: intervalSeconds });
+    autoRefreshSettings.set(tabId, { 
+      enabled: false, 
+      interval: intervalSeconds, 
+      resetSession: resetSession || false,
+      playlistEnabled: playlistEnabled || false,
+      playlistMode: playlistMode || 'sequential',
+      playlistUrls: playlistUrls || []
+    });
     stopAutoRefresh(tabId);
   }
 }
@@ -947,16 +1112,57 @@ ipcMain.handle('resolve-path', (event, filePath) => {
 // Auto-refresh IPC handlers
 ipcMain.handle('get-auto-refresh-settings', (event, tabId) => {
   const settings = autoRefreshSettings.get(tabId);
-  return settings || { enabled: false, interval: 5 };
+  return settings || { 
+    enabled: false, 
+    interval: 5, 
+    resetSession: false,
+    playlistEnabled: false,
+    playlistMode: 'sequential',
+    playlistUrls: []
+  };
 });
 
-ipcMain.handle('set-auto-refresh-settings', (event, tabId, enabled, intervalSeconds) => {
-  if (intervalSeconds < 1 || intervalSeconds > 3600) {
-    return { success: false, error: 'Interval must be between 1 and 3600 seconds' };
+ipcMain.handle('set-auto-refresh-settings', (event, tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) => {
+  if (intervalSeconds < 1 || intervalSeconds > 36000) {
+    return { success: false, error: 'Interval must be between 1 and 36000 seconds' };
   }
 
-  setAutoRefreshSettings(tabId, enabled, intervalSeconds);
+  if (playlistEnabled && (!playlistUrls || playlistUrls.length === 0)) {
+    return { success: false, error: 'Playlist must contain at least one URL' };
+  }
+
+  if (playlistMode !== 'sequential' && playlistMode !== 'random') {
+    return { success: false, error: 'Playlist mode must be "sequential" or "random"' };
+  }
+
+  setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls);
   return { success: true };
+});
+
+// Clear session data IPC handler
+ipcMain.handle('clear-session-data', async (event, tabId) => {
+  if (!tabId || !tabs.has(tabId)) {
+    return { success: false, error: 'Invalid tab ID' };
+  }
+
+  try {
+    await clearSessionData(tabId);
+    
+    // Reload the page after clearing session
+    const browserView = tabs.get(tabId);
+    if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+      setTimeout(() => {
+        if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+          browserView.webContents.reloadIgnoringCache();
+        }
+      }, 100);
+    }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error in clear-session-data:', error);
+    return { success: false, error: `Failed to clear session data: ${error.message}` };
+  }
 });
 
 // Proxy list management IPC handlers
@@ -1109,6 +1315,60 @@ ipcMain.handle('apply-proxy-to-tab', (event, tabId, proxyId) => {
     console.error('Error in apply-proxy-to-tab:', error);
     return { success: false, error: `Failed to apply proxy: ${error.message}` };
   });
+});
+
+// Browser Identity IPC handlers
+ipcMain.handle('get-browser-identity', (event, tabId) => {
+  if (!tabId || !tabs.has(tabId)) {
+    return 'chrome'; // Default to Chrome
+  }
+  return tabBrowserIdentity.get(tabId) || 'chrome';
+});
+
+ipcMain.handle('set-browser-identity', (event, tabId, identity) => {
+  if (!tabId || !tabs.has(tabId)) {
+    return { success: false, error: 'Invalid tab ID' };
+  }
+
+  if (identity !== 'chrome' && identity !== 'firefox') {
+    return { success: false, error: 'Invalid browser identity. Must be "chrome" or "firefox"' };
+  }
+
+  try {
+    applyBrowserIdentityToTab(tabId, identity);
+    
+    // Reload the page to apply new User-Agent
+    const browserView = tabs.get(tabId);
+    if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+      const currentUrl = browserView.webContents.getURL();
+      if (currentUrl && currentUrl !== 'about:blank') {
+        setTimeout(() => {
+          if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+            browserView.webContents.reloadIgnoringCache();
+          }
+        }, 100);
+      }
+    }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error in set-browser-identity:', error);
+    return { success: false, error: `Failed to set browser identity: ${error.message}` };
+  }
+});
+
+ipcMain.handle('get-user-agent', (event, tabId) => {
+  if (!tabId || !tabs.has(tabId)) {
+    return getUserAgentString('chrome');
+  }
+  
+  const browserView = tabs.get(tabId);
+  if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+    return browserView.webContents.getUserAgent();
+  }
+  
+  const identity = tabBrowserIdentity.get(tabId) || 'chrome';
+  return getUserAgentString(identity);
 });
 
 
