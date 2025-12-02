@@ -17,6 +17,10 @@ let tabBrowserIdentity = new Map(); // Map of tabId -> 'chrome' | 'firefox'
 let appMenu = null; // Store application menu for reuse
 let proxyList = []; // List of saved proxies: [{ id, name, type, host, port, username, password }]
 const PROXY_LIST_FILE = path.join(app.getPath('userData'), 'proxy-list.json');
+let autoProxySettings = { enabled: false, source: 'saved', selectedProxyId: null, avoidDuplicate: true, apiUrl: '' };
+const AUTO_PROXY_SETTINGS_FILE = path.join(app.getPath('userData'), 'auto-proxy-settings.json');
+let usedProxies = new Set(); // Track used proxies to avoid duplicates
+let fetchProxyOperations = new Map(); // Track fetch operations: Map<requestId, { shouldStop: boolean }>
 
 // Load proxy list from file
 function loadProxyList() {
@@ -37,6 +41,78 @@ function loadProxyList() {
   }
 }
 
+// Load auto proxy settings from file
+function loadAutoProxySettings() {
+  try {
+    if (fs.existsSync(AUTO_PROXY_SETTINGS_FILE)) {
+      const data = fs.readFileSync(AUTO_PROXY_SETTINGS_FILE, 'utf8');
+      autoProxySettings = JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('Error loading auto proxy settings:', error);
+    autoProxySettings = { enabled: false, source: 'saved', selectedProxyId: null, avoidDuplicate: true, apiUrl: '' };
+  }
+}
+
+// Save auto proxy settings to file
+function saveAutoProxySettings() {
+  try {
+    fs.writeFileSync(AUTO_PROXY_SETTINGS_FILE, JSON.stringify(autoProxySettings, null, 2), 'utf8');
+    return true;
+  } catch (error) {
+    console.error('Error saving auto proxy settings:', error);
+    return false;
+  }
+}
+
+// Get a proxy for auto apply (respecting avoidDuplicate flag)
+function getProxyForAutoApply() {
+  if (!autoProxySettings.enabled) {
+    return null;
+  }
+
+  if (autoProxySettings.source === 'saved') {
+    // Get from saved proxy list
+    let availableProxies = proxyList;
+
+    if (autoProxySettings.selectedProxyId) {
+      // Use specific proxy
+      const selectedProxy = proxyList.find(p => p.id === autoProxySettings.selectedProxyId);
+      if (selectedProxy) {
+        if (autoProxySettings.avoidDuplicate && usedProxies.has(selectedProxy.id)) {
+          return null; // Already used
+        }
+        usedProxies.add(selectedProxy.id);
+        return selectedProxy;
+      }
+    } else {
+      // Random from list
+      if (autoProxySettings.avoidDuplicate) {
+        availableProxies = proxyList.filter(p => !usedProxies.has(p.id));
+        if (availableProxies.length === 0) {
+          // Reset if all proxies used
+          usedProxies.clear();
+          availableProxies = proxyList;
+        }
+      }
+
+      if (availableProxies.length > 0) {
+        const randomProxy = availableProxies[Math.floor(Math.random() * availableProxies.length)];
+        if (autoProxySettings.avoidDuplicate) {
+          usedProxies.add(randomProxy.id);
+        }
+        return randomProxy;
+      }
+    }
+  } else if (autoProxySettings.source === 'api') {
+    // TODO: Implement API proxy selection
+    // For now, return null
+    return null;
+  }
+
+  return null;
+}
+
 // Save proxy list to file
 function saveProxyList() {
   try {
@@ -51,7 +127,7 @@ function saveProxyList() {
 // Get User-Agent string for browser identity
 function getUserAgentString(identity) {
   const identityType = identity || 'chrome';
-  
+
   if (identityType === 'firefox') {
     // Firefox User-Agent
     return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0';
@@ -77,10 +153,10 @@ function applyBrowserIdentityToTab(tabId, identity) {
   const userAgent = getUserAgentString(identity);
   browserView.webContents.setUserAgent(userAgent);
   console.log(`Applied browser identity "${identity}" to tab ${tabId}: ${userAgent}`);
-  
+
   // Store identity
   tabBrowserIdentity.set(tabId, identity || 'chrome');
-  
+
   return true;
 }
 
@@ -99,10 +175,10 @@ function buildProxyString(settings) {
     // With auth: http=http://username:password@host:port;https=https://username:password@host:port
     if (username && password) {
       // With authentication, use proxyRules format with full URL for both HTTP and HTTPS
-      proxyString = `http://${username}:${password}@${host}:${port}`;
+      proxyString = `${type}://${username}:${password}@${host}:${port}`;
     } else {
       // Without authentication, use simple format: host:port (works for both HTTP and HTTPS)
-      proxyString = `${host}:${port}`;
+      proxyString = `${type}://${host}:${port}`;
     }
   } else if (type === 'socks4' || type === 'socks5') {
     // For SOCKS, use format: socks5://host:port or socks4://host:port
@@ -248,10 +324,29 @@ function createNewTab(url = 'about:blank') {
   updateActiveTabBounds();
 
   // Apply proxy settings if they exist for this tab (e.g., copied from another tab)
+  // Or apply auto proxy if enabled
   // This must be applied before loading URL
   const existingProxy = tabProxySettings.get(tabId);
-  if (existingProxy) {
-    applyProxySettingsToTab(tabId, existingProxy).then(() => {
+  let proxyToApply = existingProxy;
+
+  // Check for auto proxy if no existing proxy
+  if (!proxyToApply) {
+    const autoProxy = getProxyForAutoApply();
+    if (autoProxy) {
+      proxyToApply = {
+        type: autoProxy.type,
+        host: autoProxy.host,
+        port: autoProxy.port,
+        username: autoProxy.username || null,
+        password: autoProxy.password || null
+      };
+      tabProxySettings.set(tabId, proxyToApply);
+      console.log(`Auto-applying proxy ${autoProxy.name} to tab ${tabId}`);
+    }
+  }
+
+  if (proxyToApply) {
+    applyProxySettingsToTab(tabId, proxyToApply).then(() => {
       // Ensure User-Agent is still set before loading
       if (!tabBrowserIdentity.has(tabId)) {
         applyBrowserIdentityToTab(tabId, 'chrome');
@@ -434,7 +529,7 @@ async function clearSessionData(tabId) {
 
   try {
     const currentUrl = browserView.webContents.getURL();
-    
+
     // Clear localStorage and sessionStorage via JavaScript injection first (before clearing cookies)
     if (currentUrl && currentUrl !== 'about:blank') {
       try {
@@ -467,6 +562,89 @@ async function clearSessionData(tabId) {
   }
 }
 
+// Get YouTube video current time
+async function getYouTubeCurrentTime(browserView) {
+  try {
+    const currentTime = await browserView.webContents.executeJavaScript(`
+      (function() {
+        try {
+          // Method 1: Try to get time from video element (most reliable)
+          const video = document.querySelector('video');
+          if (video && !isNaN(video.currentTime) && video.currentTime > 0) {
+            return Math.floor(video.currentTime);
+          }
+
+          // Method 2: Try YouTube player state
+          if (window.ytplayer && window.ytplayer.getCurrentTime) {
+            const time = window.ytplayer.getCurrentTime();
+            if (time && time > 0) return Math.floor(time);
+          }
+
+          // Method 3: Try YouTube player API
+          if (window.player && typeof window.player.getCurrentTime === 'function') {
+            const time = window.player.getCurrentTime();
+            if (time && time > 0) return Math.floor(time);
+          }
+
+          // Method 4: Try to get from YouTube's internal player state
+          if (window.yt && window.yt.config_ && window.yt.config_.EXPERIMENT_FLAGS) {
+            // Try to access player through YouTube's internal API
+            const players = document.querySelectorAll('.html5-video-player');
+            if (players.length > 0) {
+              const player = players[0];
+              if (player.getVideoData && player.getCurrentTime) {
+                const time = player.getCurrentTime();
+                if (time && time > 0) return Math.floor(time);
+              }
+            }
+          }
+
+          // Method 5: Try to get from video element even if paused
+          if (video && !isNaN(video.currentTime)) {
+            return Math.floor(video.currentTime);
+          }
+        } catch(e) {
+          console.error('Error getting YouTube time:', e);
+        }
+        return null;
+      })();
+    `);
+    return currentTime;
+  } catch (error) {
+    console.error('Error executing script to get YouTube time:', error);
+    return null;
+  }
+}
+
+// Check if URL is YouTube
+function isYouTubeUrl(url) {
+  if (!url) return false;
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname === 'www.youtube.com' ||
+           urlObj.hostname === 'youtube.com' ||
+           urlObj.hostname === 'm.youtube.com' ||
+           urlObj.hostname === 'youtu.be';
+  } catch (e) {
+    return false;
+  }
+}
+
+// Add timestamp to YouTube URL
+function addTimestampToYouTubeUrl(url, seconds) {
+  if (!url || !seconds || seconds <= 0) return url;
+  try {
+    const urlObj = new URL(url);
+    // Remove existing t parameter
+    urlObj.searchParams.delete('t');
+    // Add new t parameter
+    urlObj.searchParams.set('t', seconds);
+    return urlObj.toString();
+  } catch (e) {
+    return url;
+  }
+}
+
 // Start auto-refresh for a tab
 function startAutoRefresh(tabId, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) {
   // Stop existing auto-refresh if any
@@ -480,52 +658,87 @@ function startAutoRefresh(tabId, intervalSeconds, resetSession = false, playlist
   }
 
   const intervalMs = intervalSeconds * 1000;
+  console.log(`Starting auto-refresh for tab ${tabId} with interval ${intervalSeconds} seconds (${intervalMs}ms)`);
   const intervalId = setInterval(async () => {
     const browserView = tabs.get(tabId);
-    if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
-      // If playlist is enabled, load URL from playlist
-      if (playlistEnabled && playlistUrls && playlistUrls.length > 0) {
-        let urlToLoad;
-        
-        if (playlistMode === 'random') {
-          // Random mode: pick a random URL
-          const randomIndex = Math.floor(Math.random() * playlistUrls.length);
-          urlToLoad = playlistUrls[randomIndex];
-        } else {
-          // Sequential mode: go through URLs in order
-          let playlistIndex = playlistIndices.get(tabId) || 0;
-          urlToLoad = playlistUrls[playlistIndex];
-          playlistIndex = (playlistIndex + 1) % playlistUrls.length;
-          playlistIndices.set(tabId, playlistIndex);
-        }
+    try {
+      if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+        console.log(`Auto-refresh triggered for tab ${tabId}`);
+        // If playlist is enabled, load URL from playlist
+        if (playlistEnabled && playlistUrls && playlistUrls.length > 0) {
+          let urlToLoad;
 
-        // If resetSession is enabled, clear all session data before loading
-        if (resetSession) {
-          await clearSessionData(tabId);
-        }
-
-        // Load the URL from playlist
-        setTimeout(() => {
-          if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
-            browserView.webContents.loadURL(urlToLoad, { bypassCache: resetSession });
+          if (playlistMode === 'random') {
+            // Random mode: pick a random URL
+            const randomIndex = Math.floor(Math.random() * playlistUrls.length);
+            urlToLoad = playlistUrls[randomIndex];
+          } else {
+            // Sequential mode: go through URLs in order
+            let playlistIndex = playlistIndices.get(tabId) || 0;
+            urlToLoad = playlistUrls[playlistIndex];
+            playlistIndex = (playlistIndex + 1) % playlistUrls.length;
+            playlistIndices.set(tabId, playlistIndex);
           }
-        }, resetSession ? 100 : 0);
-      } else {
-        // Normal reload mode
-        if (resetSession) {
-          await clearSessionData(tabId);
-          setTimeout(() => {
-            if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
-              browserView.webContents.reloadIgnoringCache();
-            }
-          }, 100);
+
+          // If resetSession is enabled, clear all session data before loading
+          if (resetSession) {
+            clearSessionData(tabId);
+          }
+
+          // Load the URL from playlist
+          if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+            browserView.webContents.reload();
+          }
         } else {
-          browserView.webContents.reload();
+          // Normal reload mode
+          console.log(`Reloading tab ${tabId} (resetSession: ${resetSession})`);
+
+          // Check if it's YouTube and preserve playback time
+          const currentUrl = browserView.webContents.getURL();
+          let urlToReload = currentUrl;
+
+          if (isYouTubeUrl(currentUrl)) {
+            try {
+              const currentTime = await getYouTubeCurrentTime(browserView);
+              console.log('currentTime:', currentTime);
+
+              if (currentTime && currentTime > 0) {
+                urlToReload = addTimestampToYouTubeUrl(currentUrl, currentTime);
+                console.log(`Preserving YouTube playback time: ${currentTime} seconds`);
+              }
+            } catch (error) {
+              console.error('Error getting YouTube time:', error);
+            }
+          }
+
+          if (resetSession) {
+            clearSessionData(tabId);
+            setTimeout(() => {
+              if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
+                if (urlToReload !== currentUrl) {
+                  browserView.webContents.loadURL(urlToReload);
+                } else {
+                  browserView.webContents.reload();
+                }
+              }
+            }, 100);
+          } else {
+            if (urlToReload !== currentUrl) {
+              browserView.webContents.loadURL(urlToReload);
+            } else {
+              browserView.webContents.reload();
+            }
+          }
         }
+      } else {
+        // Tab was closed, stop auto-refresh
+        stopAutoRefresh(tabId);
       }
-    } else {
-      // Tab was closed, stop auto-refresh
-      stopAutoRefresh(tabId);
+    } catch (e) {
+      console.error(
+        `Error in auto-refresh for tab tab ${tabId} (resetSession: ${resetSession}):`,
+        e
+      );
     }
   }, intervalMs);
 
@@ -545,9 +758,9 @@ function stopAutoRefresh(tabId) {
 // Set auto-refresh settings for a tab
 function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) {
   if (enabled) {
-    autoRefreshSettings.set(tabId, { 
-      enabled: true, 
-      interval: intervalSeconds, 
+    autoRefreshSettings.set(tabId, {
+      enabled: true,
+      interval: intervalSeconds,
       resetSession: resetSession || false,
       playlistEnabled: playlistEnabled || false,
       playlistMode: playlistMode || 'sequential',
@@ -555,9 +768,9 @@ function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = 
     });
     startAutoRefresh(tabId, intervalSeconds, resetSession || false, playlistEnabled || false, playlistMode || 'sequential', playlistUrls || []);
   } else {
-    autoRefreshSettings.set(tabId, { 
-      enabled: false, 
-      interval: intervalSeconds, 
+    autoRefreshSettings.set(tabId, {
+      enabled: false,
+      interval: intervalSeconds,
       resetSession: resetSession || false,
       playlistEnabled: playlistEnabled || false,
       playlistMode: playlistMode || 'sequential',
@@ -658,6 +871,7 @@ function createSettingsWindow() {
 app.whenReady().then(() => {
   // Load proxy list on app start
   loadProxyList();
+  loadAutoProxySettings();
   createMainWindow();
 
   // Create application menu
@@ -845,6 +1059,8 @@ ipcMain.handle('test-proxy', async (event, tabId, settings) => {
         const proxyUrl = new URL(proxyString);
         const hostPort = `${proxyUrl.hostname}:${proxyUrl.port}`;
         const proxyRules = `${proxyUrl.protocol}//${hostPort}`;
+
+        console.log({ proxyRules, proxyUrl, settings });
 
         testSession.setProxy({
           proxyRules,
@@ -1112,9 +1328,9 @@ ipcMain.handle('resolve-path', (event, filePath) => {
 // Auto-refresh IPC handlers
 ipcMain.handle('get-auto-refresh-settings', (event, tabId) => {
   const settings = autoRefreshSettings.get(tabId);
-  return settings || { 
-    enabled: false, 
-    interval: 5, 
+  return settings || {
+    enabled: false,
+    interval: 5,
     resetSession: false,
     playlistEnabled: false,
     playlistMode: 'sequential',
@@ -1147,7 +1363,7 @@ ipcMain.handle('clear-session-data', async (event, tabId) => {
 
   try {
     await clearSessionData(tabId);
-    
+
     // Reload the page after clearing session
     const browserView = tabs.get(tabId);
     if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
@@ -1157,7 +1373,7 @@ ipcMain.handle('clear-session-data', async (event, tabId) => {
         }
       }, 100);
     }
-    
+
     return { success: true };
   } catch (error) {
     console.error('Error in clear-session-data:', error);
@@ -1336,7 +1552,7 @@ ipcMain.handle('set-browser-identity', (event, tabId, identity) => {
 
   try {
     applyBrowserIdentityToTab(tabId, identity);
-    
+
     // Reload the page to apply new User-Agent
     const browserView = tabs.get(tabId);
     if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
@@ -1349,7 +1565,7 @@ ipcMain.handle('set-browser-identity', (event, tabId, identity) => {
         }, 100);
       }
     }
-    
+
     return { success: true };
   } catch (error) {
     console.error('Error in set-browser-identity:', error);
@@ -1361,14 +1577,165 @@ ipcMain.handle('get-user-agent', (event, tabId) => {
   if (!tabId || !tabs.has(tabId)) {
     return getUserAgentString('chrome');
   }
-  
+
   const browserView = tabs.get(tabId);
   if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
     return browserView.webContents.getUserAgent();
   }
-  
+
   const identity = tabBrowserIdentity.get(tabId) || 'chrome';
   return getUserAgentString(identity);
+});
+
+// Auto Proxy IPC handlers
+ipcMain.handle('get-auto-proxy-settings', () => {
+  return autoProxySettings;
+});
+
+ipcMain.handle('set-auto-proxy-settings', (event, settings) => {
+  autoProxySettings = { ...autoProxySettings, ...settings };
+  saveAutoProxySettings();
+  return { success: true };
+});
+
+ipcMain.handle('fetch-and-check-proxies', async (event, apiUrl, requestId) => {
+  const { HttpsProxyAgent } = require('https-proxy-agent');
+  const ipProxyUrl = 'https://api.ipify.org/?format=json';
+
+  // Create operation tracker
+  const operationId = requestId || `fetch-${Date.now()}`;
+  fetchProxyOperations.set(operationId, { shouldStop: false });
+
+  // Dynamic import for node-fetch v3
+  let fetch;
+  try {
+    const fetchModule = await import('node-fetch');
+    fetch = fetchModule.default;
+  } catch (error) {
+    fetchProxyOperations.delete(operationId);
+    return { success: false, error: 'Failed to load fetch module' };
+  }
+
+  try {
+    // Fetch proxies from API
+    console.log('Fetching proxies from API:', apiUrl);
+    const response = await fetch(apiUrl);
+    const data = await response.json();
+
+    if (!data || !data.proxies || !Array.isArray(data.proxies)) {
+      fetchProxyOperations.delete(operationId);
+      return { success: false, error: 'Invalid API response' };
+    }
+
+    const proxies = data.proxies;
+    const workingProxies = [];
+    let checked = 0;
+    let working = 0;
+    let failed = 0;
+
+    console.log(`Found ${proxies.length} proxies to check`);
+
+    // Check each proxy (similar to test-proxy.js)
+    for (const item of proxies) {
+      const operation = fetchProxyOperations.get(operationId);
+      if (!operation || operation.shouldStop) {
+        console.log('Fetch operation stopped by user');
+        break; // Stop if requested
+      }
+
+      let checkResponse = null;
+      let proxyFound = false;
+
+      try {
+        const proxyUrl = item.proxy;
+        if (!proxyUrl) {
+          checked++;
+          continue;
+        }
+
+        // Parse proxy URL to get type, host, port (similar to test-proxy.js)
+        // Format: http://host:port or https://host:port
+        const agent = new HttpsProxyAgent(proxyUrl);
+        checkResponse = await fetch(ipProxyUrl, {
+          agent: agent,
+          timeout: 10000 // 10 second timeout
+        });
+
+        if (checkResponse && checkResponse.ok) {
+          const result = await checkResponse.json();
+          const proxyType = item.protocol || (proxyUrl.startsWith('https://') ? 'https' : 'http');
+
+          const workingProxy = {
+            proxy: proxyUrl,
+            type: proxyType,
+            ip: result.ip || item.ip || 'N/A',
+            country: item.ip_data?.country || 'Unknown',
+            port: item.port,
+            timeout: item.timeout
+          };
+
+          workingProxies.push(workingProxy);
+          working++;
+          proxyFound = true;
+          console.log(`Working proxy found: ${proxyUrl} (${item.ip_data?.country || 'Unknown'})`);
+
+          // Send working proxy immediately to renderer
+          event.sender.send('proxy-found', {
+            requestId: operationId,
+            proxy: workingProxy,
+            checked: checked + 1,
+            working,
+            failed,
+            total: proxies.length
+          });
+        } else {
+          failed++;
+        }
+      } catch (error) {
+        failed++;
+        // Silently fail individual proxy checks
+      }
+
+      checked++;
+
+      // Send progress update every 10 proxies or when proxy is found
+      if (checked % 10 === 0 || proxyFound) {
+        event.sender.send('proxy-fetch-progress', {
+          requestId: operationId,
+          checked,
+          working,
+          failed,
+          total: proxies.length
+        });
+      }
+    }
+
+    fetchProxyOperations.delete(operationId);
+
+    return {
+      success: true,
+      workingProxies: workingProxies,
+      stats: {
+        total: proxies.length,
+        checked: checked,
+        working: working,
+        failed: failed
+      }
+    };
+  } catch (error) {
+    console.error('Error fetching and checking proxies:', error);
+    fetchProxyOperations.delete(operationId);
+    return { success: false, error: error.message };
+  }
+});
+
+// Stop fetch operation
+ipcMain.handle('stop-fetch-proxies', (event, requestId) => {
+  if (requestId && fetchProxyOperations.has(requestId)) {
+    fetchProxyOperations.get(requestId).shouldStop = true;
+    return { success: true };
+  }
+  return { success: false, error: 'Operation not found' };
 });
 
 

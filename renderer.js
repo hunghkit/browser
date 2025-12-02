@@ -40,12 +40,19 @@ class BrowserController {
     this.playlistAddBtn = document.getElementById('playlist-add-btn');
     this.playlistList = document.getElementById('playlist-list');
     this.autoRefreshStatus = document.getElementById('auto-refresh-status');
+    this.autoRefreshCountdown = document.getElementById('auto-refresh-countdown');
+    this.countdownTimer = document.getElementById('countdown-timer');
     this.autoRefreshCloseBtn = document.getElementById('auto-refresh-close-btn');
     this.autoRefreshCancelBtn = document.getElementById('auto-refresh-cancel-btn');
     this.autoRefreshSaveBtn = document.getElementById('auto-refresh-save-btn');
-    
+
     // Playlist data
     this.playlistUrls = [];
+
+    // Countdown timer
+    this.countdownInterval = null;
+    this.countdownSeconds = 0;
+    this.autoRefreshIntervalValue = 0;
   }
 
   attachEventListeners() {
@@ -194,6 +201,11 @@ class BrowserController {
           this.hideLoading();
           this.updateUrl();
           this.updateNavigationButtons();
+          // Reset countdown when page finishes loading (refresh happened)
+          // Only reset if auto-refresh is enabled for this tab
+          if (this.countdownInterval) {
+            this.resetCountdown();
+          }
         }
       }
       // Update tab loading indicator
@@ -450,9 +462,22 @@ class BrowserController {
     }
 
     try {
+      // Show modal first so error can be displayed
+      this.autoRefreshModal.classList.remove('hidden');
+      this.autoRefreshModal.style.zIndex = '999999';
+      document.body.style.overflow = 'hidden';
+
+      // Hide BrowserView to allow modal interaction
+      await window.electronAPI.setModalVisible(true);
+
       const settings = await window.electronAPI.getAutoRefreshSettings(this.activeTabId);
-      this.autoRefreshEnabled.checked = settings.enabled;
-      this.autoRefreshInterval.value = settings.interval;
+
+      if (!settings) {
+        throw new Error('Failed to get auto-refresh settings from main process');
+      }
+
+      this.autoRefreshEnabled.checked = settings.enabled || false;
+      this.autoRefreshInterval.value = settings.interval || 600;
       this.autoRefreshResetSession.checked = settings.resetSession || false;
       this.autoRefreshPlaylistEnabled.checked = settings.playlistEnabled || false;
       this.playlistContainer.style.display = this.autoRefreshPlaylistEnabled.checked ? 'block' : 'none';
@@ -461,22 +486,20 @@ class BrowserController {
       this.renderPlaylist();
       this.updateAutoRefreshStatus(settings);
 
-      // Hide BrowserView to allow modal interaction
-      await window.electronAPI.setModalVisible(true);
-
-      this.autoRefreshModal.classList.remove('hidden');
-      // Ensure modal is on top
-      this.autoRefreshModal.style.zIndex = '999999';
-      document.body.style.overflow = 'hidden';
-
       // Focus on the interval input after a short delay to ensure it's ready
       setTimeout(() => {
-        this.autoRefreshInterval.focus();
-        this.autoRefreshInterval.select();
+        if (this.autoRefreshInterval) {
+          this.autoRefreshInterval.focus();
+          this.autoRefreshInterval.select();
+        }
       }, 100);
     } catch (error) {
       console.error('Error loading auto-refresh settings:', error);
-      this.showError('Failed to load auto-refresh settings');
+      const errorMsg = `Failed to load auto-refresh settings: ${error.message || error}`;
+      this.showError(errorMsg);
+      // Also show in status area
+      this.autoRefreshStatus.textContent = errorMsg;
+      this.autoRefreshStatus.className = 'auto-refresh-status error';
     }
   }
 
@@ -487,6 +510,8 @@ class BrowserController {
 
     // Restore BrowserView
     await window.electronAPI.setModalVisible(false);
+
+    // Note: Don't stop countdown here, keep it running in background
   }
 
   updateAutoRefreshStatus(settings) {
@@ -496,11 +521,72 @@ class BrowserController {
       this.autoRefreshStatus.textContent = `Auto-refresh is enabled. Page will refresh every ${settings.interval} second(s)${resetText}${playlistText}.`;
       this.autoRefreshStatus.className = 'auto-refresh-status enabled';
       this.autoRefreshBtn.classList.add('active');
+
+      // Start countdown
+      this.autoRefreshIntervalValue = settings.interval || 600;
+      console.log('Starting countdown with interval:', this.autoRefreshIntervalValue);
+      this.startCountdown();
     } else {
       this.autoRefreshStatus.textContent = 'Auto-refresh is disabled.';
       this.autoRefreshStatus.className = 'auto-refresh-status disabled';
       this.autoRefreshBtn.classList.remove('active');
+
+      // Stop countdown
+      this.stopCountdown();
     }
+  }
+
+  startCountdown() {
+    this.stopCountdown();
+    if (!this.autoRefreshIntervalValue || this.autoRefreshIntervalValue <= 0) {
+      console.warn('Cannot start countdown: invalid interval', this.autoRefreshIntervalValue);
+      return; // Don't start if interval is invalid
+    }
+    this.countdownSeconds = this.autoRefreshIntervalValue;
+    this.updateCountdownDisplay();
+    if (this.autoRefreshCountdown) {
+      this.autoRefreshCountdown.style.display = 'block';
+    }
+    console.log('Countdown started:', this.countdownSeconds, 'seconds');
+
+    this.countdownInterval = setInterval(() => {
+      this.countdownSeconds--;
+      this.updateCountdownDisplay();
+
+      if (this.countdownSeconds <= 0) {
+        console.log('Countdown reached 0, resetting...');
+        this.countdownSeconds = this.autoRefreshIntervalValue;
+        // Note: Actual refresh is handled by main.js setInterval
+        // This countdown is just for display
+      }
+    }, 1000);
+  }
+
+  stopCountdown() {
+    if (this.countdownInterval) {
+      clearInterval(this.countdownInterval);
+      this.countdownInterval = null;
+    }
+    this.autoRefreshCountdown.style.display = 'none';
+    this.countdownSeconds = 0;
+  }
+
+  resetCountdown() {
+    if (this.countdownInterval && this.autoRefreshIntervalValue > 0) {
+      this.countdownSeconds = this.autoRefreshIntervalValue;
+      this.updateCountdownDisplay();
+    }
+  }
+
+  updateCountdownDisplay() {
+    if (this.countdownSeconds <= 0) {
+      this.countdownTimer.textContent = '00:00';
+      return;
+    }
+
+    const minutes = Math.floor(this.countdownSeconds / 60);
+    const seconds = this.countdownSeconds % 60;
+    this.countdownTimer.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
 
   addPlaylistUrl() {
@@ -593,6 +679,7 @@ class BrowserController {
 
       if (result.success) {
         const settings = { enabled, interval, resetSession, playlistEnabled, playlistMode, playlistUrls };
+        console.log('Auto-refresh settings saved:', settings);
         this.updateAutoRefreshStatus(settings);
         this.autoRefreshStatus.textContent = 'Settings saved successfully!';
         this.autoRefreshStatus.className = 'auto-refresh-status success';
@@ -615,6 +702,7 @@ class BrowserController {
   async updateAutoRefreshButtonState() {
     if (!this.activeTabId) {
       this.autoRefreshBtn.classList.remove('active');
+      this.stopCountdown();
       return;
     }
 
@@ -622,8 +710,21 @@ class BrowserController {
       const settings = await window.electronAPI.getAutoRefreshSettings(this.activeTabId);
       if (settings.enabled) {
         this.autoRefreshBtn.classList.add('active');
+        // Update countdown if it's running
+        if (this.countdownInterval) {
+          this.autoRefreshIntervalValue = settings.interval;
+          // Only reset if countdown is already running
+          if (this.countdownSeconds > settings.interval) {
+            this.countdownSeconds = settings.interval;
+          }
+        } else {
+          // Start countdown if not running
+          this.autoRefreshIntervalValue = settings.interval;
+          this.startCountdown();
+        }
       } else {
         this.autoRefreshBtn.classList.remove('active');
+        this.stopCountdown();
       }
     } catch (error) {
       console.error('Error checking auto-refresh state:', error);

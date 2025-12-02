@@ -39,6 +39,7 @@ class SettingsController {
           'list': 'proxy-list-tab',
           'new': 'proxy-form-tab',
           'apply': 'apply-proxy-tab',
+          'auto': 'auto-proxy-tab',
           'browser': 'browser-identity-tab'
         };
 
@@ -53,6 +54,8 @@ class SettingsController {
         } else if (targetTab === 'apply') {
           this.loadProxySelect();
           this.updateCurrentTabInfo();
+        } else if (targetTab === 'auto') {
+          this.loadAutoProxySettings();
         } else if (targetTab === 'browser') {
           this.loadBrowserIdentity();
           this.updateBrowserTabInfo();
@@ -131,6 +134,31 @@ class SettingsController {
     this.applyBrowserIdentityBtn = document.getElementById('apply-browser-identity-btn');
     this.browserTabInfo = document.getElementById('browser-tab-info');
     this.currentUserAgent = document.getElementById('current-user-agent');
+
+    // Auto proxy elements
+    this.autoProxyEnabled = document.getElementById('auto-proxy-enabled');
+    this.autoProxySettings = document.getElementById('auto-proxy-settings');
+    this.autoProxySource = document.getElementById('auto-proxy-source');
+    this.autoProxySavedContainer = document.getElementById('auto-proxy-saved-container');
+    this.autoProxySelect = document.getElementById('auto-proxy-select');
+    this.autoProxyApiContainer = document.getElementById('auto-proxy-api-container');
+    this.autoProxyApiUrl = document.getElementById('auto-proxy-api-url');
+    this.fetchProxiesBtn = document.getElementById('fetch-proxies-btn');
+    this.stopFetchBtn = document.getElementById('stop-fetch-btn');
+    this.fetchProgress = document.getElementById('fetch-progress');
+    this.fetchStatus = document.getElementById('fetch-status');
+    this.fetchTotal = document.getElementById('fetch-total');
+    this.fetchChecked = document.getElementById('fetch-checked');
+    this.fetchWorking = document.getElementById('fetch-working');
+    this.fetchFailed = document.getElementById('fetch-failed');
+    this.autoProxyApiList = document.getElementById('auto-proxy-api-list');
+    this.autoProxyApiListContent = document.getElementById('auto-proxy-api-list-content');
+    this.saveAllWorkingBtn = document.getElementById('save-all-working-btn');
+    this.autoProxyAvoidDuplicate = document.getElementById('auto-proxy-avoid-duplicate');
+
+    this.workingProxies = []; // Store working proxies from API
+    this.isFetching = false;
+    this.currentFetchRequestId = null;
   }
 
   attachEventListeners() {
@@ -163,6 +191,45 @@ class SettingsController {
 
     this.applyBrowserIdentityBtn.addEventListener('click', () => {
       this.applyBrowserIdentity();
+    });
+
+    // Auto proxy event listeners
+    this.autoProxyEnabled.addEventListener('change', () => {
+      this.autoProxySettings.style.display = this.autoProxyEnabled.checked ? 'block' : 'none';
+      if (this.autoProxyEnabled.checked) {
+        this.saveAutoProxySettings();
+      }
+    });
+
+    this.autoProxySource.addEventListener('change', () => {
+      if (this.autoProxySource.value === 'saved') {
+        this.autoProxySavedContainer.style.display = 'block';
+        this.autoProxyApiContainer.style.display = 'none';
+      } else {
+        this.autoProxySavedContainer.style.display = 'none';
+        this.autoProxyApiContainer.style.display = 'block';
+      }
+      this.saveAutoProxySettings();
+    });
+
+    this.autoProxySelect.addEventListener('change', () => {
+      this.saveAutoProxySettings();
+    });
+
+    this.autoProxyAvoidDuplicate.addEventListener('change', () => {
+      this.saveAutoProxySettings();
+    });
+
+    this.fetchProxiesBtn.addEventListener('click', () => {
+      this.fetchAndCheckProxies();
+    });
+
+    this.stopFetchBtn.addEventListener('click', () => {
+      this.stopFetching();
+    });
+
+    this.saveAllWorkingBtn.addEventListener('click', () => {
+      this.saveAllWorkingProxies();
     });
   }
 
@@ -372,7 +439,12 @@ class SettingsController {
 
     // Validate
     if (!settings.host || !settings.port || settings.port < 1 || settings.port > 65535) {
-      this.showStatus('Please enter a valid host and port (1-65535)', 'error');
+        console.log("settings:", settings);
+
+      this.showStatus(
+        "Please enter a valid host and port (1-65535)",
+        "error",
+      );
       return;
     }
 
@@ -402,6 +474,7 @@ class SettingsController {
   async saveProxyToList() {
     const settings = this.getSettingsFromForm();
 
+    console.log(settings)
     // Validate
     if (!settings.host || !settings.port || settings.port < 1 || settings.port > 65535) {
       this.showStatus('Please enter a valid host and port (1-65535)', 'error');
@@ -540,6 +613,307 @@ class SettingsController {
       setTimeout(() => {
         this.statusMessage.classList.add('hidden');
       }, 5000);
+    }
+  }
+
+  async loadAutoProxySettings() {
+    try {
+      const settings = await window.electronAPI.getAutoProxySettings();
+      this.autoProxyEnabled.checked = settings.enabled || false;
+      this.autoProxySettings.style.display = this.autoProxyEnabled.checked ? 'block' : 'none';
+      this.autoProxySource.value = settings.source || 'saved';
+      this.autoProxySelect.value = settings.selectedProxyId || '';
+      this.autoProxyAvoidDuplicate.checked = settings.avoidDuplicate !== false;
+      this.autoProxyApiUrl.value = settings.apiUrl || this.autoProxyApiUrl.value;
+
+      if (settings.source === 'saved') {
+        this.autoProxySavedContainer.style.display = 'block';
+        this.autoProxyApiContainer.style.display = 'none';
+        await this.loadProxySelectForAuto();
+      } else {
+        this.autoProxySavedContainer.style.display = 'none';
+        this.autoProxyApiContainer.style.display = 'block';
+      }
+    } catch (error) {
+      console.error('Error loading auto proxy settings:', error);
+    }
+  }
+
+  async loadProxySelectForAuto() {
+    try {
+      const proxyList = await window.electronAPI.getProxyList();
+      this.autoProxySelect.innerHTML = '<option value="">-- Random from List --</option>';
+      proxyList.forEach(proxy => {
+        const option = document.createElement('option');
+        option.value = proxy.id;
+        option.textContent = proxy.name;
+        this.autoProxySelect.appendChild(option);
+      });
+    } catch (error) {
+      console.error('Error loading proxy select for auto:', error);
+    }
+  }
+
+  async saveAutoProxySettings() {
+    try {
+      const settings = {
+        enabled: this.autoProxyEnabled.checked,
+        source: this.autoProxySource.value,
+        selectedProxyId: this.autoProxySelect.value || null,
+        avoidDuplicate: this.autoProxyAvoidDuplicate.checked,
+        apiUrl: this.autoProxyApiUrl.value
+      };
+      await window.electronAPI.setAutoProxySettings(settings);
+    } catch (error) {
+      console.error('Error saving auto proxy settings:', error);
+      this.showStatus('Error saving auto proxy settings', 'error');
+    }
+  }
+
+  async fetchAndCheckProxies() {
+    if (this.isFetching) return;
+
+    const apiUrl = this.autoProxyApiUrl.value.trim();
+    if (!apiUrl) {
+      this.showStatus('Please enter API URL', 'error');
+      return;
+    }
+
+    this.isFetching = true;
+    this.fetchProxiesBtn.style.display = 'none';
+    this.stopFetchBtn.style.display = 'inline-block';
+    this.fetchProgress.style.display = 'block';
+    this.autoProxyApiList.style.display = 'none';
+    this.workingProxies = [];
+
+    // Generate unique request ID
+    const requestId = `fetch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this.currentFetchRequestId = requestId;
+
+    this.fetchStatus.textContent = 'Fetching proxies from API...';
+    this.fetchTotal.textContent = '0';
+    this.fetchChecked.textContent = '0';
+    this.fetchWorking.textContent = '0';
+    this.fetchFailed.textContent = '0';
+
+    try {
+      // Listen for progress updates
+      const progressHandler = (event, data) => {
+        if (data.requestId === requestId) {
+          this.fetchChecked.textContent = data.checked || 0;
+          this.fetchWorking.textContent = data.working || 0;
+          this.fetchFailed.textContent = data.failed || 0;
+          this.fetchTotal.textContent = data.total || 0;
+        }
+      };
+
+      // Listen for working proxy found (real-time)
+      const proxyFoundHandler = (event, data) => {
+        if (data.requestId === requestId && data.proxy) {
+          // Add proxy to working list immediately
+          this.workingProxies.push(data.proxy);
+
+          // Update stats
+          this.fetchChecked.textContent = data.checked || 0;
+          this.fetchWorking.textContent = data.working || 0;
+          this.fetchFailed.textContent = data.failed || 0;
+          this.fetchTotal.textContent = data.total || 0;
+
+          // Render immediately
+          this.renderWorkingProxies();
+          this.autoProxyApiList.style.display = 'block';
+
+          // Update status
+          this.fetchStatus.textContent = `Found ${data.working} working proxy/proxies... (checking...)`;
+
+          console.log('Working proxy found and displayed:', data.proxy);
+        }
+      };
+
+      // Remove old listeners if exists
+      if (window.electronAPI.removeAllListeners) {
+        window.electronAPI.removeAllListeners('proxy-fetch-progress');
+        window.electronAPI.removeAllListeners('proxy-found');
+      }
+
+      // Add progress listener (if available via preload)
+      if (window.electronAPI.onProxyFetchProgress) {
+        window.electronAPI.onProxyFetchProgress(progressHandler);
+      }
+
+      // Add proxy found listener
+      if (window.electronAPI.onProxyFound) {
+        window.electronAPI.onProxyFound(proxyFoundHandler);
+      }
+
+      const result = await window.electronAPI.fetchAndCheckProxies(apiUrl, requestId);
+
+      if (!this.isFetching) {
+        // User stopped
+        this.fetchStatus.textContent = 'Stopped by user';
+        return;
+      }
+
+      if (result.success) {
+        // Merge with already found proxies (from real-time updates)
+        const newProxies = result.workingProxies || [];
+        // Avoid duplicates
+        const existingProxyUrls = new Set(this.workingProxies.map(p => p.proxy));
+        newProxies.forEach(proxy => {
+          if (!existingProxyUrls.has(proxy.proxy)) {
+            this.workingProxies.push(proxy);
+          }
+        });
+
+        const stats = result.stats || {};
+        this.fetchTotal.textContent = stats.total || 0;
+        this.fetchChecked.textContent = stats.checked || 0;
+        this.fetchWorking.textContent = this.workingProxies.length;
+        this.fetchFailed.textContent = stats.failed || 0;
+        this.fetchStatus.textContent = `Completed: ${this.workingProxies.length} working proxies found`;
+        this.renderWorkingProxies();
+        this.autoProxyApiList.style.display = 'block';
+        this.showStatus(`Found ${this.workingProxies.length} working proxies`, 'success');
+      } else {
+        this.fetchStatus.textContent = `Error: ${result.error || 'Failed to fetch proxies'}`;
+        this.showStatus(result.error || 'Failed to fetch proxies', 'error');
+      }
+    } catch (error) {
+      console.error('Error fetching proxies:', error);
+      this.fetchStatus.textContent = `Error: ${error.message}`;
+      this.showStatus('Error fetching proxies: ' + error.message, 'error');
+    } finally {
+      this.isFetching = false;
+      this.currentFetchRequestId = null;
+      this.fetchProxiesBtn.style.display = 'inline-block';
+      this.stopFetchBtn.style.display = 'none';
+
+      // Cleanup progress listeners
+      if (window.electronAPI.removeAllListeners) {
+        window.electronAPI.removeAllListeners('proxy-fetch-progress');
+        window.electronAPI.removeAllListeners('proxy-found');
+      }
+    }
+  }
+
+  async stopFetching() {
+    if (this.currentFetchRequestId) {
+      try {
+        await window.electronAPI.stopFetchProxies(this.currentFetchRequestId);
+      } catch (error) {
+        console.error('Error stopping fetch:', error);
+      }
+    }
+    this.isFetching = false;
+    this.currentFetchRequestId = null;
+    this.fetchStatus.textContent = 'Stopping...';
+  }
+
+  renderWorkingProxies() {
+    if (this.workingProxies.length === 0) {
+      this.autoProxyApiListContent.innerHTML = '<div class="empty-list">No working proxies found</div>';
+      return;
+    }
+
+    this.autoProxyApiListContent.innerHTML = this.workingProxies.map((proxy, index) => {
+      const country = proxy.country || 'Unknown';
+      return `
+        <div class="proxy-item" data-proxy-index="${index}">
+          <div class="proxy-item-info">
+            <div class="proxy-item-name">${proxy.proxy}</div>
+            <div class="proxy-item-details">
+              ${proxy.type || 'http'} • ${country} • IP: ${proxy.ip || 'N/A'}
+            </div>
+          </div>
+          <div class="proxy-item-actions">
+            <button class="btn btn-primary btn-small save-single-proxy-btn" data-proxy-index="${index}">Save</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Attach save handlers
+    this.autoProxyApiListContent.querySelectorAll('.save-single-proxy-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const index = parseInt(e.target.dataset.proxyIndex);
+        this.saveSingleProxy(index);
+      });
+    });
+  }
+
+  async saveSingleProxy(index) {
+    const proxy = this.workingProxies[index];
+    if (!proxy) return;
+
+    try {
+      // Parse proxy string (format: http://host:port)
+      const url = new URL(proxy.proxy);
+      const type = url.protocol.replace(':', '');
+      const host = url.hostname;
+      const port = parseInt(url.port);
+
+      const proxyData = {
+        type: type,
+        host: host,
+        port: port,
+        name: `${host}:${port} (${proxy.country || 'API'})`
+      };
+
+      const result = await window.electronAPI.saveProxyToList(proxyData);
+      if (result.success) {
+        this.showStatus('Proxy saved successfully', 'success');
+        await this.loadProxyList();
+        await this.loadProxySelectForAuto();
+      } else {
+        this.showStatus(result.error || 'Failed to save proxy', 'error');
+      }
+    } catch (error) {
+      console.error('Error saving proxy:', error);
+      this.showStatus('Error saving proxy: ' + error.message, 'error');
+    }
+  }
+
+  async saveAllWorkingProxies() {
+    if (this.workingProxies.length === 0) {
+      this.showStatus('No proxies to save', 'error');
+      return;
+    }
+
+    try {
+      let saved = 0;
+      let failed = 0;
+
+      for (const proxy of this.workingProxies) {
+        try {
+          const url = new URL(proxy.proxy);
+          const type = url.protocol.replace(':', '');
+          const host = url.hostname;
+          const port = parseInt(url.port);
+
+          const proxyData = {
+            type: type,
+            host: host,
+            port: port,
+            name: `${host}:${port} (${proxy.country || 'API'})`
+          };
+
+          const result = await window.electronAPI.saveProxyToList(proxyData);
+          if (result.success) {
+            saved++;
+          } else {
+            failed++;
+          }
+        } catch (error) {
+          failed++;
+        }
+      }
+
+      this.showStatus(`Saved ${saved} proxies${failed > 0 ? `, ${failed} failed` : ''}`, saved > 0 ? 'success' : 'error');
+      await this.loadProxyList();
+      await this.loadProxySelectForAuto();
+    } catch (error) {
+      console.error('Error saving all proxies:', error);
+      this.showStatus('Error saving proxies: ' + error.message, 'error');
     }
   }
 }

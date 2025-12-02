@@ -84,6 +84,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setBrowserIdentity: (tabId, identity) => ipcRenderer.invoke('set-browser-identity', tabId, identity),
   getUserAgent: (tabId) => ipcRenderer.invoke('get-user-agent', tabId),
 
+  // Auto Proxy operations
+  getAutoProxySettings: () => ipcRenderer.invoke('get-auto-proxy-settings'),
+  setAutoProxySettings: (settings) => ipcRenderer.invoke('set-auto-proxy-settings', settings),
+  fetchAndCheckProxies: (apiUrl, requestId) => ipcRenderer.invoke('fetch-and-check-proxies', apiUrl, requestId),
+  stopFetchProxies: (requestId) => ipcRenderer.invoke('stop-fetch-proxies', requestId),
+  onProxyFetchProgress: (callback) => {
+    ipcRenderer.on('proxy-fetch-progress', (event, data) => callback(event, data));
+  },
+  onProxyFound: (callback) => {
+    ipcRenderer.on('proxy-found', (event, data) => callback(event, data));
+  },
+
   // Modal visibility
   setModalVisible: (visible) => ipcRenderer.invoke('set-modal-visible', visible),
 

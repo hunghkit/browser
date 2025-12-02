@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zen Browser</title>
+  <title>Browser</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -130,7 +130,11 @@
             <div class="form-group">
               <label for="auto-refresh-interval">Refresh Interval (seconds)</label>
               <input type="number" id="auto-refresh-interval" min="1" max="36000" value="600" />
-              <small>Minimum: 1 second, Maximum: 36000 seconds (1 hour)</small>
+              <small>Minimum: 1 second, Maximum: 36000 seconds (10 hour)</small>
+            </div>
+            <div id="auto-refresh-countdown" class="auto-refresh-countdown" style="display: none;">
+              <div class="countdown-label">Next refresh in:</div>
+              <div class="countdown-timer" id="countdown-timer">--:--</div>
             </div>
             <div class="form-group">
               <label>
