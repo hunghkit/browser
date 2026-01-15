@@ -157,17 +157,19 @@
       <div class="list-header">
         <h2>Saved Proxies</h2>
         <div style="display: flex; gap: 8px;">
-          <input type="file" id="import-file-input" accept=".json,.txt,.csv" style="display: none;">
-          <button id="import-proxy-btn" class="btn btn-secondary" style="width: 80px;" title="Import proxies from file (JSON, TXT, CSV)">📥 Import</button>
-          <button id="export-proxy-btn" class="btn btn-secondary" style="width: 80px;" title="Export proxies to file">📤 Export</button>
-          <button id="clear-all-proxy-btn" class="btn btn-secondary" style="width: 80px;" title="Clear all proxies">🗑️ Clear</button>
-          <button id="add-new-proxy-btn" class="btn btn-primary" style="width: 100px;">➕ Add New</button>
+          <button id="export-proxies-btn" class="btn btn-secondary btn-small">Export</button>
+          <button id="import-proxies-btn" class="btn btn-secondary btn-small">Import</button>
+          <button id="clear-proxies-btn" class="btn btn-secondary btn-small">Clear All</button>
+          <button id="add-new-proxy-btn" class="btn btn-primary" style="width: 100px;">Add New</button>
         </div>
       </div>
       <div id="proxy-list-container" class="proxy-list-container">
         <div class="loading">Loading...</div>
       </div>
     </div>
+    
+    <!-- Hidden file input for import -->
+    <input type="file" id="import-file-input" accept=".json" style="display: none;">
 
     <!-- Add/Edit Proxy Tab -->
     <div id="proxy-form-tab" class="tab-content">
@@ -324,46 +326,7 @@
     </div>
   </div>
 
-  <!-- Export Format Modal -->
-  <div id="export-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
-    <div style="background: white; border-radius: 8px; padding: 24px; max-width: 400px; width: 90%;">
-      <h3 style="margin-top: 0;">Export Proxies</h3>
-      <p style="color: #666; font-size: 14px;">Choose export format:</p>
-      
-      <div style="display: flex; flex-direction: column; gap: 12px; margin: 20px 0;">
-        <label style="display: flex; align-items: center; padding: 12px; border: 2px solid #e0e0e0; border-radius: 6px; cursor: pointer;">
-          <input type="radio" name="export-format" value="json" checked style="margin-right: 10px;">
-          <div>
-            <strong>JSON</strong>
-            <div style="font-size: 12px; color: #666;">Complete data with all settings</div>
-          </div>
-        </label>
-        
-        <label style="display: flex; align-items: center; padding: 12px; border: 2px solid #e0e0e0; border-radius: 6px; cursor: pointer;">
-          <input type="radio" name="export-format" value="txt" style="margin-right: 10px;">
-          <div>
-            <strong>TXT</strong>
-            <div style="font-size: 12px; color: #666;">Simple format: type://user:pass@host:port</div>
-          </div>
-        </label>
-        
-        <label style="display: flex; align-items: center; padding: 12px; border: 2px solid #e0e0e0; border-radius: 6px; cursor: pointer;">
-          <input type="radio" name="export-format" value="csv" style="margin-right: 10px;">
-          <div>
-            <strong>CSV</strong>
-            <div style="font-size: 12px; color: #666;">Spreadsheet compatible format</div>
-          </div>
-        </label>
-      </div>
-      
-      <div style="display: flex; gap: 8px; justify-content: flex-end;">
-        <button id="export-cancel-btn" class="btn btn-secondary">Cancel</button>
-        <button id="export-confirm-btn" class="btn btn-primary">Export</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="settings.js"></script>
+  <script type="module" src="./settings.js"></script>
 </body>
 </html>
 

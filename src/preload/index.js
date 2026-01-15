@@ -14,11 +14,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveProxyToList: (proxyData) => ipcRenderer.invoke('save-proxy-to-list', proxyData),
   deleteProxyFromList: (proxyId) => ipcRenderer.invoke('delete-proxy-from-list', proxyId),
   applyProxyToTab: (tabId, proxyId) => ipcRenderer.invoke('apply-proxy-to-tab', tabId, proxyId),
-  
-  // Proxy import/export
-  exportProxyList: (format) => ipcRenderer.invoke('export-proxy-list', format),
-  importProxyList: (content, options) => ipcRenderer.invoke('import-proxy-list', content, options),
+  exportProxyList: () => ipcRenderer.invoke('export-proxy-list'),
+  importProxyList: (proxies, replaceExisting) => ipcRenderer.invoke('import-proxy-list', proxies, replaceExisting),
   clearProxyList: () => ipcRenderer.invoke('clear-proxy-list'),
+  checkIp: (tabId) => ipcRenderer.invoke('check-ip', tabId),
+  toggleProxy: (tabId, enabled) => ipcRenderer.invoke('toggle-proxy', tabId, enabled),
 
   // Navigation
   navigateToUrl: (url, tabId) => ipcRenderer.invoke('navigate-to-url', url, tabId),
@@ -80,9 +80,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Auto-refresh operations
   getAutoRefreshSettings: (tabId) => ipcRenderer.invoke('get-auto-refresh-settings', tabId),
   setAutoRefreshSettings: (tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls, rotateProxy) => ipcRenderer.invoke('set-auto-refresh-settings', tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls, rotateProxy),
-  
-  // IP checking
-  getCurrentIP: (tabId) => ipcRenderer.invoke('get-current-ip', tabId),
 
   // Session operations
   clearSessionData: (tabId) => ipcRenderer.invoke('clear-session-data', tabId),

@@ -1,0 +1,6 @@
+type,host,port,username,password,name
+http,proxy1.example.com,8080,user1,pass123,Production Proxy 1
+http,proxy2.example.com,8080,user2,pass456,Production Proxy 2
+socks5,proxy3.example.com,1080,,,SOCKS5 Proxy (No Auth)
+http,192.168.1.100,3128,admin,secret,Internal Proxy
+https,proxy4.example.com,443,user3,pass789,HTTPS Proxy

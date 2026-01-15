@@ -135,14 +135,11 @@ class SettingsController {
     this.browserTabInfo = document.getElementById('browser-tab-info');
     this.currentUserAgent = document.getElementById('current-user-agent');
     
-    // Import/Export elements
-    this.importProxyBtn = document.getElementById('import-proxy-btn');
-    this.exportProxyBtn = document.getElementById('export-proxy-btn');
-    this.clearAllProxyBtn = document.getElementById('clear-all-proxy-btn');
+    // Import/Export buttons
+    this.exportProxiesBtn = document.getElementById('export-proxies-btn');
+    this.importProxiesBtn = document.getElementById('import-proxies-btn');
+    this.clearProxiesBtn = document.getElementById('clear-proxies-btn');
     this.importFileInput = document.getElementById('import-file-input');
-    this.exportModal = document.getElementById('export-modal');
-    this.exportCancelBtn = document.getElementById('export-cancel-btn');
-    this.exportConfirmBtn = document.getElementById('export-confirm-btn');
 
     // Auto proxy elements
     this.autoProxyEnabled = document.getElementById('auto-proxy-enabled');
@@ -203,16 +200,12 @@ class SettingsController {
     });
     
     // Import/Export event listeners
-    this.importProxyBtn.addEventListener('click', () => {
+    this.exportProxiesBtn.addEventListener('click', () => {
+      this.exportProxies();
+    });
+    
+    this.importProxiesBtn.addEventListener('click', () => {
       this.importFileInput.click();
-    });
-    
-    this.exportProxyBtn.addEventListener('click', () => {
-      this.showExportModal();
-    });
-    
-    this.clearAllProxyBtn.addEventListener('click', () => {
-      this.clearAllProxies();
     });
     
     this.importFileInput.addEventListener('change', (e) => {
@@ -221,12 +214,8 @@ class SettingsController {
       }
     });
     
-    this.exportCancelBtn.addEventListener('click', () => {
-      this.hideExportModal();
-    });
-    
-    this.exportConfirmBtn.addEventListener('click', () => {
-      this.confirmExport();
+    this.clearProxiesBtn.addEventListener('click', () => {
+      this.clearAllProxies();
     });
 
     // Auto proxy event listeners
@@ -953,190 +942,107 @@ class SettingsController {
     }
   }
   
-  // ============================================================================
-  // IMPORT/EXPORT METHODS
-  // ============================================================================
-  
-  showExportModal() {
-    this.exportModal.style.display = 'flex';
-  }
-  
-  hideExportModal() {
-    this.exportModal.style.display = 'none';
-  }
-  
-  async confirmExport() {
-    const format = document.querySelector('input[name="export-format"]:checked').value;
-    this.hideExportModal();
-    await this.exportProxies(format);
-  }
-  
-  async exportProxies(format = 'json') {
+  // Export proxy list to JSON file
+  async exportProxies() {
     try {
-      console.log('📤 Exporting proxies as', format);
-      const result = await window.electronAPI.exportProxyList(format);
-      
+      const result = await window.electronAPI.exportProxyList();
       if (result.success) {
-        let fileContent, fileName, mimeType;
-        
-        if (format === 'json') {
-          fileContent = JSON.stringify(result.data, null, 2);
-          fileName = `proxy-list-${Date.now()}.json`;
-          mimeType = 'application/json';
-        } else if (format === 'txt') {
-          fileContent = result.data;
-          fileName = `proxy-list-${Date.now()}.txt`;
-          mimeType = 'text/plain';
-        } else if (format === 'csv') {
-          fileContent = result.data;
-          fileName = `proxy-list-${Date.now()}.csv`;
-          mimeType = 'text/csv';
-        }
-        
-        // Create and download file
-        const blob = new Blob([fileContent], { type: mimeType });
+        const data = JSON.stringify(result.data, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = fileName;
+        a.download = `proxy-list-${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        
-        const count = Array.isArray(result.data) ? result.data.length : result.data.split('\n').filter(l => l.trim()).length;
-        this.showStatus(`✅ Exported ${count} proxies as ${format.toUpperCase()}!`, 'success');
-        console.log('✅ Export successful:', fileName);
+        this.showStatus(`Exported ${result.data.length} proxies successfully!`, 'success');
       } else {
-        this.showStatus('❌ Failed to export: ' + result.error, 'error');
-        console.error('Export failed:', result.error);
+        this.showStatus('Failed to export proxies: ' + result.error, 'error');
       }
     } catch (error) {
       console.error('Export error:', error);
-      this.showStatus('❌ Export error: ' + error.message, 'error');
+      this.showStatus('Export error: ' + error.message, 'error');
     }
   }
   
+  // Import proxy list from JSON file
   async handleImportFile(file) {
     try {
-      console.log('📥 Importing file:', file.name);
       const reader = new FileReader();
-      
       reader.onload = async (e) => {
         try {
           const content = e.target.result;
+          const proxies = JSON.parse(content);
           
-          // Confirm import options
-          const replace = confirm(
-            `Import ${file.name}?\n\n` +
-            `• Click OK to merge with existing proxies (skip duplicates)\n` +
-            `• Click Cancel to abort import\n\n` +
-            `Tip: Hold Shift while clicking Import to replace all existing proxies`
-          );
-          
-          if (replace === null || replace === false) {
-            console.log('Import cancelled by user');
-            this.importFileInput.value = ''; // Reset input
+          if (!Array.isArray(proxies)) {
+            this.showStatus('Invalid file format: Expected an array of proxies', 'error');
             return;
           }
           
-          const options = {
-            skipDuplicates: true,
-            replaceExisting: false
-          };
+          // Ask user if they want to replace or merge
+          const replace = confirm(
+            `Import ${proxies.length} proxies?\n\n` +
+            `Click OK to MERGE with existing proxies\n` +
+            `Click Cancel to abort`
+          );
           
-          console.log('Import options:', options);
-          const result = await window.electronAPI.importProxyList(content, options);
+          if (replace === null) return; // User cancelled
+          
+          const result = await window.electronAPI.importProxyList(proxies, false);
           
           if (result.success) {
-            let message = `✅ Imported ${result.imported} proxies!`;
-            if (result.skipped > 0) {
-              message += ` (${result.skipped} skipped)`;
-            }
-            message += ` Total: ${result.total}`;
-            
-            this.showStatus(message, 'success');
-            console.log('✅ Import successful:', result);
-            
-            // Show errors if any (first 5)
-            if (result.errors && result.errors.length > 0) {
-              const errorSample = result.errors.slice(0, 5).join('\n');
-              console.warn('Import warnings:', errorSample);
-              if (result.errors.length > 5) {
-                console.warn(`... and ${result.errors.length - 5} more errors`);
-              }
-            }
-            
-            // Refresh the list
-            await this.loadProxyList();
-            await this.loadProxySelectForAuto();
+            this.showStatus(
+              `Successfully imported ${result.imported} proxies! ` +
+              `(${result.skipped} skipped, Total: ${result.total})`,
+              'success'
+            );
+            this.loadProxyList();
+            this.loadProxySelect();
           } else {
-            this.showStatus('❌ Import failed: ' + result.error, 'error');
-            console.error('Import failed:', result);
-            
-            if (result.errors) {
-              console.error('Errors:', result.errors);
-            }
+            this.showStatus('Failed to import proxies: ' + result.error, 'error');
           }
         } catch (error) {
           console.error('Parse error:', error);
-          this.showStatus('❌ Invalid file format: ' + error.message, 'error');
+          this.showStatus('Invalid JSON file: ' + error.message, 'error');
         } finally {
           // Reset file input
           this.importFileInput.value = '';
         }
       };
-      
-      reader.onerror = (error) => {
-        console.error('File read error:', error);
-        this.showStatus('❌ Failed to read file', 'error');
-        this.importFileInput.value = '';
-      };
-      
       reader.readAsText(file);
     } catch (error) {
       console.error('Import error:', error);
-      this.showStatus('❌ Import error: ' + error.message, 'error');
-      this.importFileInput.value = '';
+      this.showStatus('Import error: ' + error.message, 'error');
     }
   }
   
+  // Clear all proxies
   async clearAllProxies() {
+    const proxyList = await window.electronAPI.getProxyList();
+    if (proxyList.length === 0) {
+      this.showStatus('Proxy list is already empty', 'info');
+      return;
+    }
+    
+    const confirmed = confirm(
+      `Are you sure you want to delete all ${proxyList.length} proxies?\n\n` +
+      `This action cannot be undone!`
+    );
+    
+    if (!confirmed) return;
+    
     try {
-      const proxyList = await window.electronAPI.getProxyList();
-      const count = proxyList.length;
-      
-      if (count === 0) {
-        this.showStatus('No proxies to clear', 'info');
-        return;
-      }
-      
-      const confirmed = confirm(
-        `⚠️ Clear All Proxies?\n\n` +
-        `This will permanently delete ${count} proxies.\n\n` +
-        `This action cannot be undone!`
-      );
-      
-      if (!confirmed) {
-        console.log('Clear cancelled by user');
-        return;
-      }
-      
-      console.log('🗑️  Clearing all proxies...');
       const result = await window.electronAPI.clearProxyList();
-      
       if (result.success) {
-        this.showStatus(`✅ Cleared ${result.cleared} proxies successfully!`, 'success');
-        console.log('✅ Clear successful');
-        
-        // Refresh the list
-        await this.loadProxyList();
-        await this.loadProxySelectForAuto();
+        this.showStatus('All proxies cleared successfully!', 'success');
+        this.loadProxyList();
+        this.loadProxySelect();
       } else {
-        this.showStatus('❌ Failed to clear proxies: ' + result.error, 'error');
-        console.error('Clear failed:', result.error);
+        this.showStatus('Failed to clear proxies: ' + result.error, 'error');
       }
     } catch (error) {
       console.error('Clear error:', error);
-      this.showStatus('❌ Clear error: ' + error.message, 'error');
+      this.showStatus('Clear error: ' + error.message, 'error');
     }
   }
 }

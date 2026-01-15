@@ -1,0 +1,23 @@
+# Test Import File - TXT Format
+# This file demonstrates various supported proxy formats
+
+# Simple host:port format (defaults to HTTP)
+192.168.1.100:8080
+10.0.0.50:3128
+
+# Full URL format with protocol
+http://proxy1.example.com:8080
+https://proxy2.example.com:443
+socks5://proxy3.example.com:1080
+
+# With authentication
+http://username:password@proxy4.example.com:8080
+socks5://user123:pass456@proxy5.example.com:1080
+
+# Mixed formats
+proxy6.example.com:8888
+http://proxy7.example.com:9090
+
+# Comments are ignored
+// This is a comment
+# Another comment

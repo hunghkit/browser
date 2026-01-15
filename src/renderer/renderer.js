@@ -20,8 +20,6 @@ class BrowserController {
     this.devtoolsBtn = document.getElementById('devtools-btn');
     this.autoRefreshBtn = document.getElementById('auto-refresh-btn');
     this.clearSessionBtn = document.getElementById('clear-session-btn');
-    this.checkIpBtn = document.getElementById('check-ip-btn');
-    this.ipDisplay = document.getElementById('ip-display');
     this.proxySelector = document.getElementById('proxy-selector');
     this.errorMessage = document.getElementById('error-message');
     this.errorText = document.getElementById('error-text');
@@ -42,10 +40,6 @@ class BrowserController {
     this.playlistUrlInput = document.getElementById('playlist-url-input');
     this.playlistAddBtn = document.getElementById('playlist-add-btn');
     this.playlistList = document.getElementById('playlist-list');
-    this.playlistImportBtn = document.getElementById('playlist-import-btn');
-    this.playlistExportBtn = document.getElementById('playlist-export-btn');
-    this.playlistClearBtn = document.getElementById('playlist-clear-btn');
-    this.playlistImportInput = document.getElementById('playlist-import-input');
     this.autoRefreshStatus = document.getElementById('auto-refresh-status');
     this.autoRefreshCountdown = document.getElementById('auto-refresh-countdown');
     this.countdownTimer = document.getElementById('countdown-timer');
@@ -60,6 +54,13 @@ class BrowserController {
     this.countdownInterval = null;
     this.countdownSeconds = 0;
     this.autoRefreshIntervalValue = 0;
+    
+    // Proxy status elements
+    this.checkIpBtn = document.getElementById('check-ip-btn');
+    this.toggleProxyBtn = document.getElementById('toggle-proxy-btn');
+    this.proxyStatusIndicator = document.getElementById('proxy-status-indicator');
+    this.currentIpDisplay = document.getElementById('current-ip');
+    this.proxyEnabled = false;
   }
 
   attachEventListeners() {
@@ -111,13 +112,10 @@ class BrowserController {
       this.clearSessionData();
     });
 
-    this.checkIpBtn.addEventListener('click', () => {
-      this.checkCurrentIP();
-    });
-
     // Proxy selector
     this.proxySelector.addEventListener('change', () => {
       this.applyProxyToCurrentTab();
+      this.updateProxyStatusBar();
     });
 
     // Auto-refresh modal handlers
@@ -148,25 +146,6 @@ class BrowserController {
       }
     });
 
-    // Playlist import/export handlers
-    this.playlistImportBtn.addEventListener('click', () => {
-      this.playlistImportInput.click();
-    });
-
-    this.playlistExportBtn.addEventListener('click', () => {
-      this.exportPlaylistUrls();
-    });
-
-    this.playlistClearBtn.addEventListener('click', () => {
-      this.clearPlaylistUrls();
-    });
-
-    this.playlistImportInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        this.importPlaylistUrls(e.target.files[0]);
-      }
-    });
-
     // Close modal on background click
     this.autoRefreshModal.addEventListener('click', (e) => {
       if (e.target === this.autoRefreshModal) {
@@ -183,6 +162,16 @@ class BrowserController {
     this.errorClose.addEventListener('click', () => {
       this.hideError();
     });
+    
+    // Check IP button
+    this.checkIpBtn.addEventListener('click', () => {
+      this.checkCurrentIp();
+    });
+    
+    // Toggle proxy button
+    this.toggleProxyBtn.addEventListener('click', () => {
+      this.toggleProxyForCurrentTab();
+    });
   }
 
   async loadInitialTabs() {
@@ -197,6 +186,11 @@ class BrowserController {
       if (activeTabId && this.tabs.has(activeTabId)) {
         this.switchToTab(activeTabId);
       }
+      
+      // Auto-check IP on initial load
+      setTimeout(() => {
+        this.checkCurrentIp();
+      }, 2000);
     } catch (error) {
       console.error('Error loading initial tabs:', error);
     }
@@ -373,6 +367,10 @@ class BrowserController {
 
     // Update auto-refresh button state
     this.updateAutoRefreshButtonState();
+    
+    // Update proxy selector and status
+    await this.updateProxySelector();
+    this.updateProxyStatusBar();
   }
 
   updateTabInfo(tabId, title, url) {
@@ -672,215 +670,6 @@ class BrowserController {
     });
   }
 
-  // ============================================================================
-  // PLAYLIST IMPORT/EXPORT METHODS
-  // ============================================================================
-
-  exportPlaylistUrls() {
-    if (this.playlistUrls.length === 0) {
-      this.autoRefreshStatus.textContent = 'No URLs to export';
-      this.autoRefreshStatus.className = 'auto-refresh-status error';
-      setTimeout(() => {
-        this.autoRefreshStatus.textContent = '';
-        this.autoRefreshStatus.className = 'auto-refresh-status';
-      }, 2000);
-      return;
-    }
-
-    try {
-      // Export as simple text file (one URL per line)
-      const content = this.playlistUrls.join('\n');
-      const blob = new Blob([content], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `playlist-urls-${Date.now()}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      this.autoRefreshStatus.textContent = `✅ Exported ${this.playlistUrls.length} URLs!`;
-      this.autoRefreshStatus.className = 'auto-refresh-status success';
-      setTimeout(() => {
-        this.autoRefreshStatus.textContent = '';
-        this.autoRefreshStatus.className = 'auto-refresh-status';
-      }, 2000);
-
-      console.log(`📤 Exported ${this.playlistUrls.length} playlist URLs`);
-    } catch (error) {
-      console.error('Export error:', error);
-      this.autoRefreshStatus.textContent = '❌ Export failed: ' + error.message;
-      this.autoRefreshStatus.className = 'auto-refresh-status error';
-    }
-  }
-
-  importPlaylistUrls(file) {
-    try {
-      console.log('📥 Importing playlist URLs from:', file.name);
-      const reader = new FileReader();
-
-      reader.onload = (e) => {
-        try {
-          const content = e.target.result;
-          let urls = [];
-
-          // Try to detect format
-          if (file.name.endsWith('.json')) {
-            // JSON format
-            try {
-              const parsed = JSON.parse(content);
-              if (Array.isArray(parsed)) {
-                urls = parsed;
-              } else if (parsed.urls && Array.isArray(parsed.urls)) {
-                urls = parsed.urls;
-              } else {
-                throw new Error('JSON must be an array of URLs or object with "urls" array');
-              }
-            } catch (err) {
-              this.autoRefreshStatus.textContent = '❌ Invalid JSON format: ' + err.message;
-              this.autoRefreshStatus.className = 'auto-refresh-status error';
-              this.playlistImportInput.value = '';
-              return;
-            }
-          } else {
-            // Text format (one URL per line)
-            urls = content
-              .split('\n')
-              .map(line => line.trim())
-              .filter(line => {
-                // Filter out empty lines and comments
-                return line && !line.startsWith('#') && !line.startsWith('//');
-              });
-          }
-
-          if (urls.length === 0) {
-            this.autoRefreshStatus.textContent = 'No valid URLs found in file';
-            this.autoRefreshStatus.className = 'auto-refresh-status error';
-            this.playlistImportInput.value = '';
-            return;
-          }
-
-          // Ask user about import mode
-          const shouldReplace = confirm(
-            `Import ${urls.length} URLs from ${file.name}?\n\n` +
-            `Click OK to ADD to current playlist (${this.playlistUrls.length} URLs)\n` +
-            `Click Cancel to abort`
-          );
-
-          if (!shouldReplace) {
-            console.log('Import cancelled by user');
-            this.playlistImportInput.value = '';
-            return;
-          }
-
-          // Validate and add URLs
-          let imported = 0;
-          let skipped = 0;
-          let invalid = 0;
-
-          urls.forEach(url => {
-            // Basic URL validation
-            if (!url.includes('.') || url.includes(' ')) {
-              invalid++;
-              console.warn('Invalid URL skipped:', url);
-              return;
-            }
-
-            // Format URL if needed
-            let formattedUrl = url;
-            if (!url.includes('://')) {
-              formattedUrl = 'https://' + url;
-            }
-
-            // Check for duplicates
-            if (this.playlistUrls.includes(formattedUrl)) {
-              skipped++;
-              console.log('Duplicate URL skipped:', formattedUrl);
-              return;
-            }
-
-            this.playlistUrls.push(formattedUrl);
-            imported++;
-          });
-
-          // Update UI
-          this.renderPlaylist();
-
-          // Show result
-          let message = `✅ Imported ${imported} URLs!`;
-          if (skipped > 0) message += ` (${skipped} duplicates skipped)`;
-          if (invalid > 0) message += ` (${invalid} invalid)`;
-          message += ` Total: ${this.playlistUrls.length}`;
-
-          this.autoRefreshStatus.textContent = message;
-          this.autoRefreshStatus.className = 'auto-refresh-status success';
-
-          console.log(`✅ Import complete:`, { imported, skipped, invalid, total: this.playlistUrls.length });
-
-          setTimeout(() => {
-            this.autoRefreshStatus.textContent = '';
-            this.autoRefreshStatus.className = 'auto-refresh-status';
-          }, 3000);
-
-        } catch (error) {
-          console.error('Parse error:', error);
-          this.autoRefreshStatus.textContent = '❌ Failed to parse file: ' + error.message;
-          this.autoRefreshStatus.className = 'auto-refresh-status error';
-        } finally {
-          this.playlistImportInput.value = '';
-        }
-      };
-
-      reader.onerror = (error) => {
-        console.error('File read error:', error);
-        this.autoRefreshStatus.textContent = '❌ Failed to read file';
-        this.autoRefreshStatus.className = 'auto-refresh-status error';
-        this.playlistImportInput.value = '';
-      };
-
-      reader.readAsText(file);
-    } catch (error) {
-      console.error('Import error:', error);
-      this.autoRefreshStatus.textContent = '❌ Import error: ' + error.message;
-      this.autoRefreshStatus.className = 'auto-refresh-status error';
-      this.playlistImportInput.value = '';
-    }
-  }
-
-  clearPlaylistUrls() {
-    if (this.playlistUrls.length === 0) {
-      this.autoRefreshStatus.textContent = 'Playlist is already empty';
-      this.autoRefreshStatus.className = 'auto-refresh-status';
-      setTimeout(() => {
-        this.autoRefreshStatus.textContent = '';
-      }, 2000);
-      return;
-    }
-
-    const confirmed = confirm(
-      `⚠️ Clear all ${this.playlistUrls.length} URLs from playlist?\n\n` +
-      `This action cannot be undone!`
-    );
-
-    if (!confirmed) {
-      console.log('Clear cancelled by user');
-      return;
-    }
-
-    const count = this.playlistUrls.length;
-    this.playlistUrls = [];
-    this.renderPlaylist();
-
-    this.autoRefreshStatus.textContent = `✅ Cleared ${count} URLs from playlist`;
-    this.autoRefreshStatus.className = 'auto-refresh-status success';
-    
-    console.log(`🗑️  Cleared ${count} playlist URLs`);
-
-    setTimeout(() => {
-      this.autoRefreshStatus.textContent = '';
-      this.autoRefreshStatus.className = 'auto-refresh-status';
-    }, 2000);
-  }
-
   async saveAutoRefreshSettings() {
     if (!this.activeTabId) {
       this.showError('No active tab');
@@ -920,7 +709,7 @@ class BrowserController {
       );
 
       if (result.success) {
-        const settings = { enabled, interval, resetSession, playlistEnabled, playlistMode, playlistUrls };
+        const settings = { enabled, interval, resetSession, rotateProxy, playlistEnabled, playlistMode, playlistUrls };
         console.log('Auto-refresh settings saved:', settings);
         this.updateAutoRefreshStatus(settings);
         this.autoRefreshStatus.textContent = 'Settings saved successfully!';
@@ -1048,48 +837,6 @@ class BrowserController {
     }
   }
 
-  async checkCurrentIP() {
-    if (!this.activeTabId) {
-      this.showError('No active tab');
-      return;
-    }
-
-    try {
-      // Show loading state
-      this.ipDisplay.textContent = '🔄';
-      this.ipDisplay.style.color = '#666';
-      
-      const result = await window.electronAPI.getCurrentIP(this.activeTabId);
-      
-      if (result.success) {
-        const ipText = `${result.ip} (${result.country})`;
-        this.ipDisplay.textContent = ipText;
-        this.ipDisplay.style.color = '#4CAF50';
-        this.ipDisplay.title = `IP: ${result.ip}\nCountry: ${result.country}`;
-        
-        console.log('✅ Current IP:', ipText);
-        
-        // Show success message
-        this.showError(`Current IP: ${ipText}`);
-        setTimeout(() => {
-          this.hideError();
-        }, 3000);
-      } else {
-        this.ipDisplay.textContent = '❌';
-        this.ipDisplay.style.color = '#f44336';
-        this.ipDisplay.title = 'Failed to check IP';
-        this.showError(result.error || 'Failed to check IP');
-        console.error('Failed to check IP:', result.error);
-      }
-    } catch (error) {
-      console.error('Error checking IP:', error);
-      this.ipDisplay.textContent = '❌';
-      this.ipDisplay.style.color = '#f44336';
-      this.ipDisplay.title = 'Error checking IP';
-      this.showError('Error checking IP: ' + error.message);
-    }
-  }
-
   async applyProxyToCurrentTab() {
     if (!this.activeTabId) {
       this.showError('No active tab');
@@ -1102,6 +849,12 @@ class BrowserController {
       const result = await window.electronAPI.applyProxyToTab(this.activeTabId, proxyId);
       if (result.success) {
         // Success - proxy will be applied and page reloaded
+        this.proxyEnabled = !!proxyId;
+        this.updateProxyStatusBar();
+        // Auto-check IP after applying proxy
+        setTimeout(() => {
+          this.checkCurrentIp();
+        }, 2000);
       } else {
         this.showError(result.error || 'Failed to apply proxy');
         // Revert selector
@@ -1112,6 +865,115 @@ class BrowserController {
       this.showError('Error applying proxy: ' + error.message);
       // Revert selector
       await this.updateProxySelector();
+    }
+  }
+  
+  // Check current IP address
+  async checkCurrentIp() {
+    if (!this.activeTabId) {
+      this.showError('No active tab');
+      return;
+    }
+    
+    try {
+      // Show checking state
+      this.currentIpDisplay.textContent = 'IP: Checking...';
+      this.currentIpDisplay.classList.add('loading');
+      
+      const statusDot = this.proxyStatusIndicator.querySelector('.status-dot');
+      statusDot.className = 'status-dot status-checking';
+      
+      const result = await window.electronAPI.checkIp(this.activeTabId);
+      
+      this.currentIpDisplay.classList.remove('loading');
+      
+      if (result.success) {
+        const ipText = result.country ? `IP: ${result.ip} (${result.country})` : `IP: ${result.ip}`;
+        this.currentIpDisplay.textContent = ipText;
+        this.currentIpDisplay.title = result.proxyInfo ? `Via: ${result.proxyInfo}` : 'Direct connection';
+        
+        // Update status dot
+        statusDot.className = result.proxyEnabled ? 'status-dot status-enabled' : 'status-dot status-disabled';
+        this.proxyEnabled = result.proxyEnabled;
+        
+      } else {
+        this.currentIpDisplay.textContent = 'IP: Check failed';
+        this.currentIpDisplay.title = result.error || 'Unknown error';
+        statusDot.className = 'status-dot status-error';
+      }
+    } catch (error) {
+      console.error('Error checking IP:', error);
+      this.currentIpDisplay.textContent = 'IP: Error';
+      this.currentIpDisplay.classList.remove('loading');
+      this.currentIpDisplay.title = error.message;
+      
+      const statusDot = this.proxyStatusIndicator.querySelector('.status-dot');
+      statusDot.className = 'status-dot status-error';
+    }
+  }
+  
+  // Toggle proxy on/off for current tab
+  async toggleProxyForCurrentTab() {
+    if (!this.activeTabId) {
+      this.showError('No active tab');
+      return;
+    }
+    
+    try {
+      const newState = !this.proxyEnabled;
+      
+      this.toggleProxyBtn.disabled = true;
+      this.toggleProxyBtn.textContent = newState ? 'Enabling...' : 'Disabling...';
+      
+      const result = await window.electronAPI.toggleProxy(this.activeTabId, newState);
+      
+      if (result.success) {
+        this.proxyEnabled = result.enabled;
+        this.updateProxyStatusBar();
+        
+        // Auto-check IP after toggling
+        setTimeout(() => {
+          this.checkCurrentIp();
+        }, 1000);
+      } else {
+        this.showError(result.error || 'Failed to toggle proxy');
+      }
+    } catch (error) {
+      console.error('Error toggling proxy:', error);
+      this.showError('Error toggling proxy: ' + error.message);
+    } finally {
+      this.toggleProxyBtn.disabled = false;
+      this.updateProxyStatusBar();
+    }
+  }
+  
+  // Update proxy status bar UI
+  updateProxyStatusBar() {
+    const statusText = this.proxyStatusIndicator.querySelector('.status-text');
+    const statusDot = this.proxyStatusIndicator.querySelector('.status-dot');
+    const toggleText = this.toggleProxyBtn.querySelector('.toggle-text') || this.toggleProxyBtn;
+    
+    // Get current proxy from selector
+    const hasProxySelected = this.proxySelector.value && this.proxySelector.value !== '';
+    
+    if (this.proxyEnabled && hasProxySelected) {
+      statusText.textContent = 'Proxy Enabled';
+      statusDot.className = 'status-dot status-enabled';
+      toggleText.textContent = 'Disable';
+      this.toggleProxyBtn.classList.add('active');
+      this.toggleProxyBtn.disabled = false;
+    } else if (hasProxySelected && !this.proxyEnabled) {
+      statusText.textContent = 'Proxy Disabled';
+      statusDot.className = 'status-dot status-disabled';
+      toggleText.textContent = 'Enable';
+      this.toggleProxyBtn.classList.remove('active');
+      this.toggleProxyBtn.disabled = false;
+    } else {
+      statusText.textContent = 'No Proxy';
+      statusDot.className = 'status-dot status-disabled';
+      toggleText.textContent = 'Enable';
+      this.toggleProxyBtn.classList.remove('active');
+      this.toggleProxyBtn.disabled = true;
     }
   }
 }

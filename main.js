@@ -16,6 +16,7 @@ let tabSessions = new Map(); // Map of tabId -> Session
 let tabBrowserIdentity = new Map(); // Map of tabId -> 'chrome' | 'firefox'
 let appMenu = null; // Store application menu for reuse
 let proxyList = []; // List of saved proxies: [{ id, name, type, host, port, username, password }]
+let tabCurrentIP = new Map(); // Map of tabId -> current IP address
 const PROXY_LIST_FILE = path.join(app.getPath('userData'), 'proxy-list.json');
 let autoProxySettings = { enabled: false, source: 'saved', selectedProxyId: null, avoidDuplicate: true, apiUrl: '' };
 const AUTO_PROXY_SETTINGS_FILE = path.join(app.getPath('userData'), 'auto-proxy-settings.json');
@@ -233,6 +234,14 @@ async function applyProxySettingsToTab(tabId, settings) {
         host: proxyUrl.hostname,
       };
 
+      app.on('login', (event, webContents, request, authInfo, callback) => {
+        console.log('login:', authInfo)
+        if (authInfo.isProxy && authInfo.host === proxyUrl.hostname) {
+          event.preventDefault();
+          callback(proxyUrl.username, proxyUrl.password);
+        }
+      })
+      
       tabSession.setProxy({ proxyRules }, () => {
         console.log(
           `Proxy callback: Proxy applied to tab ${tabId}:`,
@@ -646,7 +655,7 @@ function addTimestampToYouTubeUrl(url, seconds) {
 }
 
 // Start auto-refresh for a tab
-function startAutoRefresh(tabId, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) {
+function startAutoRefresh(tabId, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = [], rotateProxy = false) {
   // Stop existing auto-refresh if any
   stopAutoRefresh(tabId);
 
@@ -658,12 +667,44 @@ function startAutoRefresh(tabId, intervalSeconds, resetSession = false, playlist
   }
 
   const intervalMs = intervalSeconds * 1000;
-  console.log(`Starting auto-refresh for tab ${tabId} with interval ${intervalSeconds} seconds (${intervalMs}ms)`);
+  console.log(`Starting auto-refresh for tab ${tabId} with interval ${intervalSeconds} seconds (${intervalMs}ms), rotateProxy: ${rotateProxy}`);
   const intervalId = setInterval(async () => {
     const browserView = tabs.get(tabId);
     try {
       if (browserView && browserView.webContents && !browserView.webContents.isDestroyed()) {
         console.log(`Auto-refresh triggered for tab ${tabId}`);
+        
+        // Rotate proxy if enabled
+        if (rotateProxy && proxyList && proxyList.length > 0) {
+          console.log('🔄 Rotating proxy...');
+          // Get current proxy index or start from 0
+          let currentIndex = browserView.__proxyRotationIndex || 0;
+          
+          // Get enabled proxies only
+          const enabledProxies = proxyList.filter(p => p.enabled !== false);
+          
+          if (enabledProxies.length > 0) {
+            // Move to next proxy
+            currentIndex = (currentIndex + 1) % enabledProxies.length;
+            const nextProxy = enabledProxies[currentIndex];
+            
+            // Store rotation index
+            browserView.__proxyRotationIndex = currentIndex;
+            
+            console.log(`📡 Switching to proxy ${currentIndex + 1}/${enabledProxies.length}: ${nextProxy.host}:${nextProxy.port}`);
+            
+            // Apply the proxy
+            try {
+              await applyProxySettingsToTab(tabId, nextProxy);
+              console.log(`✅ Proxy applied successfully`);
+            } catch (error) {
+              console.error('❌ Failed to apply proxy:', error);
+            }
+          } else {
+            console.log('⚠️ No enabled proxies available for rotation');
+          }
+        }
+        
         // If playlist is enabled, load URL from playlist
         if (playlistEnabled && playlistUrls && playlistUrls.length > 0) {
           let urlToLoad;
@@ -756,7 +797,7 @@ function stopAutoRefresh(tabId) {
 }
 
 // Set auto-refresh settings for a tab
-function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) {
+function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = [], rotateProxy = false) {
   if (enabled) {
     autoRefreshSettings.set(tabId, {
       enabled: true,
@@ -764,9 +805,10 @@ function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = 
       resetSession: resetSession || false,
       playlistEnabled: playlistEnabled || false,
       playlistMode: playlistMode || 'sequential',
-      playlistUrls: playlistUrls || []
+      playlistUrls: playlistUrls || [],
+      rotateProxy: rotateProxy || false
     });
-    startAutoRefresh(tabId, intervalSeconds, resetSession || false, playlistEnabled || false, playlistMode || 'sequential', playlistUrls || []);
+    startAutoRefresh(tabId, intervalSeconds, resetSession || false, playlistEnabled || false, playlistMode || 'sequential', playlistUrls || [], rotateProxy || false);
   } else {
     autoRefreshSettings.set(tabId, {
       enabled: false,
@@ -774,7 +816,8 @@ function setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession = 
       resetSession: resetSession || false,
       playlistEnabled: playlistEnabled || false,
       playlistMode: playlistMode || 'sequential',
-      playlistUrls: playlistUrls || []
+      playlistUrls: playlistUrls || [],
+      rotateProxy: rotateProxy || false
     });
     stopAutoRefresh(tabId);
   }
@@ -1058,9 +1101,17 @@ ipcMain.handle('test-proxy', async (event, tabId, settings) => {
       try {
         const proxyUrl = new URL(proxyString);
         const hostPort = `${proxyUrl.hostname}:${proxyUrl.port}`;
-        const proxyRules = `${proxyUrl.protocol}//${hostPort}`;
+        const proxyRules = `${hostPort}`;
 
         console.log({ proxyRules, proxyUrl, settings });
+
+        app.on('login', (event, webContents, request, authInfo, callback) => {
+          console.log('login:', authInfo)
+          if (authInfo.isProxy && authInfo.host === proxyUrl.hostname) {
+            event.preventDefault();
+            callback(proxyUrl.username, proxyUrl.password);
+          }
+        })
 
         testSession.setProxy({
           proxyRules,
@@ -1083,6 +1134,7 @@ ipcMain.handle('test-proxy', async (event, tabId, settings) => {
             webSecurity: true,
           },
         });
+
 
           const testUrl = "https://api.myip.com";
 
@@ -1146,6 +1198,7 @@ ipcMain.handle('test-proxy', async (event, tabId, settings) => {
               } else if (errorDescription) {
                 errorMsg = `Connection failed: ${errorDescription}`;
               }
+              console.log({ errorCode, errorDescription })
               console.error(
                 `Proxy test failed with error code ${errorCode}:`,
                 errorMsg,
@@ -1338,7 +1391,7 @@ ipcMain.handle('get-auto-refresh-settings', (event, tabId) => {
   };
 });
 
-ipcMain.handle('set-auto-refresh-settings', (event, tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = []) => {
+ipcMain.handle('set-auto-refresh-settings', (event, tabId, enabled, intervalSeconds, resetSession = false, playlistEnabled = false, playlistMode = 'sequential', playlistUrls = [], rotateProxy = false) => {
   if (intervalSeconds < 1 || intervalSeconds > 36000) {
     return { success: false, error: 'Interval must be between 1 and 36000 seconds' };
   }
@@ -1351,7 +1404,7 @@ ipcMain.handle('set-auto-refresh-settings', (event, tabId, enabled, intervalSeco
     return { success: false, error: 'Playlist mode must be "sequential" or "random"' };
   }
 
-  setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls);
+  setAutoRefreshSettings(tabId, enabled, intervalSeconds, resetSession, playlistEnabled, playlistMode, playlistUrls, rotateProxy);
   return { success: true };
 });
 
@@ -1737,5 +1790,382 @@ ipcMain.handle('stop-fetch-proxies', (event, requestId) => {
   }
   return { success: false, error: 'Operation not found' };
 });
+
+// ============================================================================
+// PROXY IMPORT/EXPORT HANDLERS
+// ============================================================================
+
+// Export proxy list with multiple format support
+ipcMain.handle('export-proxy-list', (event, format = 'json') => {
+  try {
+    if (format === 'json') {
+      return { success: true, data: proxyList, format: 'json' };
+    } else if (format === 'txt') {
+      // Export as simple text: type://username:password@host:port (one per line)
+      const lines = proxyList.map(proxy => {
+        const auth = proxy.username ? `${proxy.username}:${proxy.password || ''}@` : '';
+        return `${proxy.type}://${auth}${proxy.host}:${proxy.port}`;
+      });
+      return { success: true, data: lines.join('\n'), format: 'txt' };
+    } else if (format === 'csv') {
+      // Export as CSV: type,host,port,username,password,name
+      const headers = 'type,host,port,username,password,name\n';
+      const rows = proxyList.map(proxy => {
+        return [
+          proxy.type || '',
+          proxy.host || '',
+          proxy.port || '',
+          proxy.username || '',
+          proxy.password || '',
+          (proxy.name || '').replace(/,/g, ';') // Replace commas in name
+        ].join(',');
+      });
+      return { success: true, data: headers + rows.join('\n'), format: 'csv' };
+    }
+    return { success: false, error: 'Unsupported format' };
+  } catch (error) {
+    console.error('Error exporting proxy list:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Parse proxy string in various formats
+function parseProxyString(str) {
+  str = str.trim();
+  if (!str) return null;
+  
+  // Skip comments
+  if (str.startsWith('#') || str.startsWith('//')) return null;
+  
+  // Try URL format: type://[username:password@]host:port
+  try {
+    const url = new URL(str);
+    return {
+      type: url.protocol.replace(':', ''),
+      host: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? '443' : '80'),
+      username: url.username || '',
+      password: url.password || ''
+    };
+  } catch (e) {
+    // Not a valid URL, try other formats
+  }
+  
+  // Try simple format: host:port
+  const simpleMatch = str.match(/^([^:@]+):(\d+)$/);
+  if (simpleMatch) {
+    return {
+      type: 'http',
+      host: simpleMatch[1],
+      port: simpleMatch[2],
+      username: '',
+      password: ''
+    };
+  }
+  
+  // Try format with auth: username:password@host:port
+  const authMatch = str.match(/^([^:]+):([^@]+)@([^:]+):(\d+)$/);
+  if (authMatch) {
+    return {
+      type: 'http',
+      host: authMatch[3],
+      port: authMatch[4],
+      username: authMatch[1],
+      password: authMatch[2]
+    };
+  }
+  
+  // Try type://host:port format
+  const typeMatch = str.match(/^(https?|socks[45]?):\/\/([^:]+):(\d+)$/);
+  if (typeMatch) {
+    return {
+      type: typeMatch[1],
+      host: typeMatch[2],
+      port: typeMatch[3],
+      username: '',
+      password: ''
+    };
+  }
+  
+  return null;
+}
+
+// Import proxy list with auto-format detection and enhanced validation
+ipcMain.handle('import-proxy-list', (event, content, options = {}) => {
+  try {
+    const { replaceExisting = false, skipDuplicates = true } = options;
+    let importedProxies = [];
+    let imported = 0;
+    let skipped = 0;
+    let errors = [];
+
+    console.log('🔄 Starting proxy import...');
+    console.log('Options:', { replaceExisting, skipDuplicates });
+
+    // Auto-detect format and parse
+    if (typeof content === 'string') {
+      content = content.trim();
+      
+      // Try JSON format first
+      if (content.startsWith('[') || content.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(content);
+          importedProxies = Array.isArray(parsed) ? parsed : [parsed];
+          console.log(`📋 Detected JSON format: ${importedProxies.length} proxies`);
+        } catch (e) {
+          errors.push('Failed to parse JSON: ' + e.message);
+          console.error('❌ JSON parse error:', e.message);
+          return { success: false, error: 'Invalid JSON format', errors };
+        }
+      } 
+      // Try CSV format (has commas and possibly header)
+      else if (content.includes(',')) {
+        const lines = content.split('\n').filter(l => l.trim());
+        const hasHeader = lines[0] && lines[0].toLowerCase().includes('type');
+        const dataLines = hasHeader ? lines.slice(1) : lines;
+        
+        console.log(`📊 Detected CSV format: ${dataLines.length} lines`);
+        
+        importedProxies = dataLines.map((line, index) => {
+          const parts = line.split(',').map(p => p.trim());
+          if (parts.length >= 3) {
+            return {
+              type: parts[0] || 'http',
+              host: parts[1],
+              port: parts[2],
+              username: parts[3] || '',
+              password: parts[4] || '',
+              name: parts[5] || `Imported ${parts[1]}:${parts[2]}`
+            };
+          }
+          errors.push(`CSV line ${index + 1}: Not enough columns`);
+          return null;
+        }).filter(p => p !== null);
+      }
+      // Try plain text format (one proxy per line)
+      else {
+        const lines = content.split('\n').filter(l => l.trim());
+        console.log(`📝 Detected TXT format: ${lines.length} lines`);
+        
+        importedProxies = lines.map((line, index) => {
+          const parsed = parseProxyString(line);
+          if (parsed) {
+            return {
+              ...parsed,
+              name: `${parsed.host}:${parsed.port}`
+            };
+          }
+          if (line.trim() && !line.startsWith('#') && !line.startsWith('//')) {
+            errors.push(`Line ${index + 1}: Could not parse "${line}"`);
+          }
+          return null;
+        }).filter(p => p !== null);
+      }
+    } else if (Array.isArray(content)) {
+      importedProxies = content;
+      console.log(`📦 Direct array import: ${importedProxies.length} proxies`);
+    } else {
+      return { success: false, error: 'Invalid data format' };
+    }
+
+    console.log(`✅ Parsed ${importedProxies.length} proxies`);
+
+    // Validate and import proxies
+    importedProxies.forEach((proxy, index) => {
+      // Validate required fields
+      if (!proxy.host || !proxy.port) {
+        skipped++;
+        errors.push(`Proxy ${index + 1}: Missing host or port`);
+        return;
+      }
+      
+      // Validate port number
+      const portNum = parseInt(proxy.port);
+      if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+        skipped++;
+        errors.push(`Proxy ${index + 1}: Invalid port ${proxy.port}`);
+        return;
+      }
+      
+      // Normalize proxy type
+      let type = (proxy.type || 'http').toLowerCase();
+      if (!['http', 'https', 'socks4', 'socks5'].includes(type)) {
+        type = 'http'; // Default to http for unknown types
+      }
+      
+      // Create normalized proxy object
+      const normalizedProxy = {
+        id: proxy.id || `proxy-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        type: type,
+        host: proxy.host.trim(),
+        port: String(portNum),
+        username: (proxy.username || '').trim(),
+        password: (proxy.password || '').trim(),
+        name: proxy.name || `${proxy.host}:${proxy.port}`,
+        enabled: proxy.enabled !== false
+      };
+
+      // Check for duplicates by host:port combination
+      const duplicateIndex = proxyList.findIndex(
+        p => p.host === normalizedProxy.host && p.port === normalizedProxy.port
+      );
+      
+      if (duplicateIndex !== -1) {
+        if (replaceExisting) {
+          // Keep the original ID when replacing
+          normalizedProxy.id = proxyList[duplicateIndex].id;
+          proxyList[duplicateIndex] = normalizedProxy;
+          imported++;
+          console.log(`🔄 Replaced: ${normalizedProxy.host}:${normalizedProxy.port}`);
+        } else if (!skipDuplicates) {
+          // Add as new even if duplicate exists
+          proxyList.push(normalizedProxy);
+          imported++;
+          console.log(`➕ Added duplicate: ${normalizedProxy.host}:${normalizedProxy.port}`);
+        } else {
+          skipped++;
+          console.log(`⏭️  Skipped duplicate: ${normalizedProxy.host}:${normalizedProxy.port}`);
+        }
+      } else {
+        proxyList.push(normalizedProxy);
+        imported++;
+        console.log(`✅ Imported: ${normalizedProxy.host}:${normalizedProxy.port}`);
+      }
+    });
+
+    console.log('📊 Import summary:', { imported, skipped, total: proxyList.length });
+
+    if (saveProxyList()) {
+      return { 
+        success: true, 
+        imported, 
+        skipped, 
+        total: proxyList.length,
+        errors: errors.length > 0 ? errors.slice(0, 10) : undefined // Limit errors to first 10
+      };
+    } else {
+      return { success: false, error: 'Failed to save proxy list' };
+    }
+  } catch (error) {
+    console.error('❌ Import error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Clear all proxies
+ipcMain.handle('clear-proxy-list', () => {
+  try {
+    const count = proxyList.length;
+    proxyList.length = 0; // Clear array
+    
+    if (saveProxyList()) {
+      console.log(`🗑️  Cleared ${count} proxies`);
+      return { success: true, cleared: count };
+    } else {
+      return { success: false, error: 'Failed to save empty proxy list' };
+    }
+  } catch (error) {
+    console.error('Error clearing proxy list:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Get current IP for a tab
+ipcMain.handle('get-current-ip', async (event, tabId) => {
+  try {
+    if (!tabId || !tabs.has(tabId)) {
+      return { success: false, error: 'Invalid tab ID' };
+    }
+
+    const browserView = tabs.get(tabId);
+    if (!browserView || !browserView.webContents || browserView.webContents.isDestroyed()) {
+      return { success: false, error: 'Browser view not available' };
+    }
+
+    console.log('🌐 Checking current IP...');
+
+    // Create a temporary view to check IP without affecting the main view
+    const session = browserView.webContents.session;
+    const { net } = require('electron');
+
+    return new Promise((resolve) => {
+      const request = net.request({
+        method: 'GET',
+        url: 'https://api.myip.com',
+        session: session
+      });
+
+      let responseData = '';
+
+      request.on('response', (response) => {
+        response.on('data', (chunk) => {
+          responseData += chunk.toString();
+        });
+
+        response.on('end', () => {
+          try {
+            const data = JSON.parse(responseData);
+            const ip = data.ip;
+            const country = data.country;
+            
+            console.log(`✅ Current IP: ${ip} (${country})`);
+            
+            // Store the IP for this tab
+            tabCurrentIP.set(tabId, { ip, country });
+            
+            // Update window title
+            updateWindowTitle(tabId, ip, country);
+            
+            resolve({ success: true, ip, country });
+          } catch (error) {
+            console.error('Failed to parse IP response:', error);
+            resolve({ success: false, error: 'Failed to parse IP response' });
+          }
+        });
+      });
+
+      request.on('error', (error) => {
+        console.error('Failed to check IP:', error);
+        resolve({ success: false, error: error.message });
+      });
+
+      request.end();
+    });
+  } catch (error) {
+    console.error('Error checking IP:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Update window title with IP information
+function updateWindowTitle(tabId, ip, country) {
+  if (!mainWindow || activeTabId !== tabId) return;
+  
+  try {
+    const browserView = tabs.get(tabId);
+    if (!browserView || !browserView.webContents || browserView.webContents.isDestroyed()) {
+      return;
+    }
+
+    const pageTitle = browserView.webContents.getTitle() || 'Untitled';
+    const proxy = tabProxySettings.get(tabId);
+    
+    let title = pageTitle;
+    
+    // Add IP and country information
+    if (ip && country) {
+      title += ` | IP: ${ip} (${country})`;
+    }
+    
+    // Add proxy information
+    if (proxy && proxy.host) {
+      title += ` | Proxy: ${proxy.host}:${proxy.port}`;
+    }
+    
+    mainWindow.setTitle(title);
+  } catch (error) {
+    console.error('Error updating window title:', error);
+  }
+}
 
 
